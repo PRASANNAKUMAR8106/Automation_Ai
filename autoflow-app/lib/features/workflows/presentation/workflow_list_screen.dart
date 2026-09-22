@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 
 class WorkflowListScreen extends StatefulWidget {
@@ -94,7 +95,9 @@ class _WorkflowListScreenState extends State<WorkflowListScreen> with SingleTick
                   ],
                 ),
                 ElevatedButton.icon(
-                  onPressed: () {},
+                  onPressed: () {
+                    context.push('/workflows/builder');
+                  },
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('New Automation'),
                 ),
@@ -148,13 +151,16 @@ class _WorkflowListScreenState extends State<WorkflowListScreen> with SingleTick
                   final isActive = wf['status'] == 'ACTIVE';
 
                   return Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Row(
-                        children: [
-                          // Channel Icon
-                          Container(
-                            padding: const EdgeInsets.all(12),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => context.push('/workflows/${wf['id']}/builder'),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Row(
+                          children: [
+                            // Channel Icon
+                            Container(
+                              padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
                               color: wf['channel'] == 'INSTAGRAM'
                                   ? const Color(0xFFE1306C).withValues(alpha: 0.15)
@@ -239,6 +245,11 @@ class _WorkflowListScreenState extends State<WorkflowListScreen> with SingleTick
 
                           // Action Menu
                           PopupMenuButton<String>(
+                            onSelected: (action) {
+                              if (action == 'edit') {
+                                context.push('/workflows/${wf['id']}/builder');
+                              }
+                            },
                             itemBuilder: (context) => [
                               const PopupMenuItem(value: 'edit', child: Text('Open Canvas')),
                               const PopupMenuItem(value: 'test', child: Text('Test Run')),
@@ -250,7 +261,8 @@ class _WorkflowListScreenState extends State<WorkflowListScreen> with SingleTick
                         ],
                       ),
                     ),
-                  );
+                  ),
+                );
                 },
               ),
             ),

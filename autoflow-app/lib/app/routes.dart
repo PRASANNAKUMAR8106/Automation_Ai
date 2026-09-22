@@ -10,6 +10,7 @@ import '../features/dashboard/presentation/app_shell.dart';
 import '../features/dashboard/presentation/dashboard_screen.dart';
 import '../features/inbox/presentation/inbox_screen.dart';
 import '../features/influencer/presentation/influencer_dashboard_screen.dart';
+import '../features/workflow_builder/presentation/workflow_builder_screen.dart';
 import '../features/workflows/presentation/workflow_list_screen.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -88,6 +89,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (context, state) => const BillingScreen(),
           ),
         ],
+      ),
+
+      // Visual Workflow Canvas Routes (Full-screen immersion)
+      GoRoute(
+        path: '/workflows/builder',
+        builder: (context, state) {
+          final id = state.uri.queryParameters['id'];
+          return WorkflowBuilderScreen(workflowId: id);
+        },
+      ),
+      GoRoute(
+        path: '/workflows/:id/builder',
+        builder: (context, state) {
+          final id = state.pathParameters['id'];
+          return WorkflowBuilderScreen(workflowId: id);
+        },
       ),
     ],
   );
