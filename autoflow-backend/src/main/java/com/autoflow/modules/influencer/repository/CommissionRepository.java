@@ -12,4 +12,7 @@ import java.util.UUID;
 public interface CommissionRepository extends JpaRepository<Commission, UUID> {
     List<Commission> findByPayment(Payment payment);
     List<Commission> findByPaymentId(UUID paymentId);
+    List<Commission> findByInfluencerIdOrderByCreatedAtDesc(UUID influencerId);
+    List<Commission> findByInfluencerIdAndStatus(UUID influencerId, com.autoflow.modules.influencer.entity.CommissionStatus status);
+    List<Commission> findByStatusAndQualifiesAtBefore(com.autoflow.modules.influencer.entity.CommissionStatus status, java.time.Instant threshold);
 }
