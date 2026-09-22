@@ -1,7 +1,6 @@
-import 'package:dio/dio.dart';
-import '../../core/constants/api_constants.dart';
-import '../../core/network/api_client.dart';
-import '../../core/storage/secure_storage_service.dart';
+import 'package:autoflow_app/core/constants/api_constants.dart';
+import 'package:autoflow_app/core/network/api_client.dart';
+import 'package:autoflow_app/core/storage/secure_storage_service.dart';
 import '../domain/user_model.dart';
 
 class AuthRepository {

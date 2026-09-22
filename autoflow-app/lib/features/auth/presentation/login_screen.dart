@@ -56,8 +56,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       // Branding Header
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           Container(
                             padding: const EdgeInsets.all(10),
@@ -93,8 +94,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: AppTheme.error.withOpacity(0.12),
-                            border: Border.all(color: AppTheme.error.withOpacity(0.5)),
+                            color: AppTheme.error.withValues(alpha: 0.12),
+                            border: Border.all(color: AppTheme.error.withValues(alpha: 0.5)),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
@@ -179,8 +180,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       const SizedBox(height: 24),
 
                       // Switch to Register
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           Text('New to AutoFlow? ', style: Theme.of(context).textTheme.bodyMedium),
                           GestureDetector(

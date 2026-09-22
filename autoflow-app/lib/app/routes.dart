@@ -4,11 +4,15 @@ import 'package:go_router/go_router.dart';
 import '../features/auth/presentation/auth_controller.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/register_screen.dart';
+import '../features/billing/presentation/billing_screen.dart';
+import '../features/contacts_crm/presentation/contacts_screen.dart';
+import '../features/dashboard/presentation/app_shell.dart';
 import '../features/dashboard/presentation/dashboard_screen.dart';
+import '../features/inbox/presentation/inbox_screen.dart';
+import '../features/influencer/presentation/influencer_dashboard_screen.dart';
+import '../features/workflows/presentation/workflow_list_screen.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
-  final authNotifier = ref.read(authStateNotifierProvider.notifier);
-
   return GoRouter(
     initialLocation: '/dashboard',
     refreshListenable: _AuthStateListenable(ref),
@@ -35,6 +39,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
+      // Public Auth Routes
       GoRoute(
         path: '/login',
         builder: (context, state) => const LoginScreen(),
@@ -53,9 +58,36 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           return RegisterScreen(initialReferralCode: refCode);
         },
       ),
-      GoRoute(
-        path: '/dashboard',
-        builder: (context, state) => const DashboardScreen(),
+
+      // Protected Dashboard Shell Routes
+      ShellRoute(
+        builder: (context, state, child) => AppShell(child: child),
+        routes: [
+          GoRoute(
+            path: '/dashboard',
+            builder: (context, state) => const DashboardScreen(),
+          ),
+          GoRoute(
+            path: '/workflows',
+            builder: (context, state) => const WorkflowListScreen(),
+          ),
+          GoRoute(
+            path: '/inbox',
+            builder: (context, state) => const InboxScreen(),
+          ),
+          GoRoute(
+            path: '/contacts',
+            builder: (context, state) => const ContactsScreen(),
+          ),
+          GoRoute(
+            path: '/influencer',
+            builder: (context, state) => const InfluencerDashboardScreen(),
+          ),
+          GoRoute(
+            path: '/billing',
+            builder: (context, state) => const BillingScreen(),
+          ),
+        ],
       ),
     ],
   );
@@ -63,6 +95,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
 class _AuthStateListenable extends ChangeNotifier {
   _AuthStateListenable(Ref ref) {
-    ref.listen(authStateNotifierProvider, (_, __) => notifyListeners());
+    ref.listen(authStateNotifierProvider, (previous, current) => notifyListeners());
   }
 }

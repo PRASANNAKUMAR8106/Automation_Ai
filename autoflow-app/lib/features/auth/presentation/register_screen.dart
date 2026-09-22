@@ -114,8 +114,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: AppTheme.error.withOpacity(0.12),
-                            border: Border.all(color: AppTheme.error.withOpacity(0.5)),
+                            color: AppTheme.error.withValues(alpha: 0.12),
+                            border: Border.all(color: AppTheme.error.withValues(alpha: 0.5)),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
