@@ -25,8 +25,14 @@ import java.util.List;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    @Value("${autoflow.cors.allowed-origins:http://localhost:3000,http://localhost:8080}")
-    private List<String> allowedOrigins;
+    private final com.autoflow.modules.auth.security.JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    public SecurityConfig(
+            com.autoflow.modules.auth.security.JwtAuthenticationFilter jwtAuthenticationFilter,
+            @Value("${autoflow.cors.allowed-origins:http://localhost:3000,http://localhost:8080}") List<String> allowedOrigins) {
+        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.allowedOrigins = allowedOrigins;
+    }
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -54,7 +60,8 @@ public class SecurityConfig {
                         ).permitAll()
                         // Secured by default
                         .anyRequest().authenticated()
-                );
+                )
+                .addFilterBefore(jwtAuthenticationFilter, org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
