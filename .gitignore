@@ -12,6 +12,7 @@ desktop.ini
 
 # Environment Variables & Secrets (CRITICAL - NEVER COMMIT)
 .env
+.env.*
 .env.local
 .env.*.local
 *.pem
@@ -19,6 +20,19 @@ desktop.ini
 *.keystore
 *.jks
 *.p12
+*.pfx
+*.crt
+*.cert
+*.der
+id_rsa*
+id_ed25519*
+*.pkcs8
+*.pkcs12
+*credentials*.json
+*service-account*.json
+secrets.yml
+secrets.yaml
+*.secret
 *.mobileprovision
 google-services.json
 GoogleService-Info.plist
