@@ -1,0 +1,81 @@
+# AutoFlow AI - Root .gitignore
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Environment Variables & Secrets (CRITICAL - NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+
+# IDE & Editor Files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+
+# Java & Gradle
+autoflow-backend/.gradle/
+autoflow-backend/build/
+autoflow-backend/out/
+autoflow-backend/bin/
+autoflow-backend/.settings/
+!autoflow-backend/gradle/wrapper/gradle-wrapper.jar
+*.class
+*.log
+hs_err_pid*
+
+# Flutter & Dart
+autoflow-app/.dart_tool/
+autoflow-app/.flutter-plugins
+autoflow-app/.flutter-plugins-dependencies
+autoflow-app/.packages
+autoflow-app/build/
+autoflow-app/.pub-cache/
+autoflow-app/.pub/
+autoflow-app/ios/Pods/
+autoflow-app/ios/.symlinks/
+autoflow-app/ios/Flutter/Flutter.framework
+autoflow-app/ios/Flutter/Flutter.podspec
+autoflow-app/ios/Flutter/Generated.xcconfig
+autoflow-app/ios/Flutter/app.framework
+autoflow-app/android/.gradle/
+autoflow-app/android/local.properties
+autoflow-app/android/app/release/
+autoflow-app/web/build/
+
+# Docker Local Volume Mounts
+.docker-data/
+postgres-data/
+redis-data/
+minio-data/
+
+# Temporary / Scratch Files
+scratch/
+tmp/
+*.tmp

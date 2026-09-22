@@ -1,0 +1,95 @@
+services:
+  # PostgreSQL 16 with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: autoflow_postgres
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${DB_NAME:-autoflow_db}
+      POSTGRES_USER: ${DB_USER:-autoflow_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-autoflow_secure_pass_2026}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./autoflow-infra/docker/postgres/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-autoflow_user} -d ${DB_NAME:-autoflow_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - autoflow_network
+
+  # Redis 7 with AOF Persistence & Auth
+  redis:
+    image: redis:7.2-alpine
+    container_name: autoflow_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - redis_data:/data
+      - ./autoflow-infra/docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-autoflow_redis_pass_2026}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - autoflow_network
+
+  # MinIO Local S3-Compatible Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: autoflow_minio
+    restart: unless-stopped
+    ports:
+      - "${S3_PORT:-9000}:9000"
+      - "${S3_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-autoflow_minio_admin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-autoflow_minio_secret_2026}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - autoflow_network
+
+  # MinIO Bucket Auto-Provisioner
+  minio-init:
+    image: minio/mc:latest
+    container_name: autoflow_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 ${S3_ACCESS_KEY:-autoflow_minio_admin} ${S3_SECRET_KEY:-autoflow_minio_secret_2026};
+      /usr/bin/mc mb --ignore-existing myminio/autoflow-media;
+      /usr/bin/mc mb --ignore-existing myminio/autoflow-invoices;
+      /usr/bin/mc mb --ignore-existing myminio/autoflow-public;
+      /usr/bin/mc anonymous set download myminio/autoflow-public;
+      exit 0;
+      "
+    networks:
+      - autoflow_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  autoflow_network:
+    name: autoflow_network
+    driver: bridge
