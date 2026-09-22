@@ -18,9 +18,19 @@ public interface CrmService {
 
     void addTagsToContact(UUID organizationId, UUID contactId, List<String> tags);
 
+    void removeTagFromContact(UUID organizationId, UUID contactId, String tag);
+
+    Contact getContactById(UUID organizationId, UUID contactId);
+
+    List<Contact> getContacts(UUID organizationId, String search, String tag);
+
     List<Contact> getContacts(UUID organizationId);
+
+    Conversation getConversationById(UUID organizationId, UUID conversationId);
 
     List<Conversation> getConversations(UUID organizationId);
 
     List<Message> getMessages(UUID organizationId, UUID conversationId);
+
+    Message sendAgentReply(UUID organizationId, UUID conversationId, String content, String mediaUrl);
 }

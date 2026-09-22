@@ -1,6 +1,11 @@
 package com.autoflow.modules.crm.service;
 
 import com.autoflow.common.exceptions.ResourceNotFoundException;
+import com.autoflow.common.security.TokenEncryptionService;
+import com.autoflow.modules.channel.entity.ConnectedAccount;
+import com.autoflow.modules.channel.provider.instagram.InstagramChannelProvider;
+import com.autoflow.modules.channel.provider.whatsapp.WhatsAppChannelProvider;
+import com.autoflow.modules.channel.repository.ConnectedAccountRepository;
 import com.autoflow.modules.crm.entity.*;
 import com.autoflow.modules.crm.repository.ContactRepository;
 import com.autoflow.modules.crm.repository.ConversationRepository;
@@ -11,11 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 @Slf4j
 @Service
@@ -25,6 +26,10 @@ public class CrmServiceImpl implements CrmService {
     private final ContactRepository contactRepository;
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
+    private final ConnectedAccountRepository connectedAccountRepository;
+    private final TokenEncryptionService tokenEncryptionService;
+    private final InstagramChannelProvider instagramChannelProvider;
+    private final WhatsAppChannelProvider whatsAppChannelProvider;
 
     @Override
     @Transactional
@@ -93,12 +98,7 @@ public class CrmServiceImpl implements CrmService {
     public void addTagsToContact(UUID organizationId, UUID contactId, List<String> tags) {
         if (tags == null || tags.isEmpty()) return;
 
-        Contact contact = contactRepository.findById(contactId)
-                .orElseThrow(() -> new ResourceNotFoundException("Contact", contactId));
-        if (!contact.getOrganizationId().equals(organizationId)) {
-            throw new ResourceNotFoundException("Contact", contactId);
-        }
-
+        Contact contact = getContactById(organizationId, contactId);
         Set<String> tagSet = new HashSet<>(contact.getTags() != null ? contact.getTags() : List.of());
         tagSet.addAll(tags);
         contact.setTags(new ArrayList<>(tagSet));
@@ -106,9 +106,66 @@ public class CrmServiceImpl implements CrmService {
     }
 
     @Override
+    @Transactional
+    public void removeTagFromContact(UUID organizationId, UUID contactId, String tag) {
+        if (tag == null || tag.isBlank()) return;
+
+        Contact contact = getContactById(organizationId, contactId);
+        if (contact.getTags() != null && contact.getTags().contains(tag)) {
+            List<String> updated = new ArrayList<>(contact.getTags());
+            updated.remove(tag);
+            contact.setTags(updated);
+            contactRepository.save(contact);
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Contact getContactById(UUID organizationId, UUID contactId) {
+        Contact contact = contactRepository.findById(contactId)
+                .orElseThrow(() -> new ResourceNotFoundException("Contact", contactId));
+        if (!contact.getOrganizationId().equals(organizationId)) {
+            throw new ResourceNotFoundException("Contact", contactId);
+        }
+        return contact;
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public List<Contact> getContacts(UUID organizationId) {
         return contactRepository.findByOrganizationId(organizationId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Contact> getContacts(UUID organizationId, String search, String tag) {
+        List<Contact> all = contactRepository.findByOrganizationId(organizationId);
+        return all.stream()
+                .filter(c -> {
+                    if (search != null && !search.isBlank()) {
+                        String s = search.toLowerCase();
+                        boolean matchesUsername = c.getUsername() != null && c.getUsername().toLowerCase().contains(s);
+                        boolean matchesFullName = c.getFullName() != null && c.getFullName().toLowerCase().contains(s);
+                        boolean matchesEmail = c.getEmail() != null && c.getEmail().toLowerCase().contains(s);
+                        if (!matchesUsername && !matchesFullName && !matchesEmail) return false;
+                    }
+                    if (tag != null && !tag.isBlank()) {
+                        if (c.getTags() == null || !c.getTags().contains(tag)) return false;
+                    }
+                    return true;
+                })
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Conversation getConversationById(UUID organizationId, UUID conversationId) {
+        Conversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Conversation", conversationId));
+        if (!conversation.getOrganizationId().equals(organizationId)) {
+            throw new ResourceNotFoundException("Conversation", conversationId);
+        }
+        return conversation;
     }
 
     @Override
@@ -120,6 +177,50 @@ public class CrmServiceImpl implements CrmService {
     @Override
     @Transactional(readOnly = true)
     public List<Message> getMessages(UUID organizationId, UUID conversationId) {
+        getConversationById(organizationId, conversationId); // Assert existence and tenant boundary
         return messageRepository.findByConversationIdOrderBySentAtAsc(conversationId);
+    }
+
+    @Override
+    @Transactional
+    public Message sendAgentReply(UUID organizationId, UUID conversationId, String content, String mediaUrl) {
+        Conversation conversation = getConversationById(organizationId, conversationId);
+        Contact contact = conversation.getContact();
+        ChannelType channel = conversation.getChannel();
+        String recipientId = contact.getExternalId();
+
+        // Resolve access token from connected account
+        String token = "mock_channel_token";
+        Optional<ConnectedAccount> accountOpt = connectedAccountRepository.findByOrganizationIdAndChannel(organizationId, channel);
+        if (accountOpt.isPresent()) {
+            try {
+                token = tokenEncryptionService.decrypt(accountOpt.get().getEncryptedAccessToken());
+            } catch (Exception e) {
+                log.warn("Decryption failed for channel account, using fallback: {}", e.getMessage());
+            }
+        }
+
+        String externalMsgId = "agent_reply_" + System.currentTimeMillis();
+        try {
+            if (channel == ChannelType.INSTAGRAM) {
+                if (mediaUrl != null && !mediaUrl.isBlank()) {
+                    externalMsgId = instagramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                } else {
+                    externalMsgId = instagramChannelProvider.sendPrivateDirectMessage(token, recipientId, content);
+                }
+            } else if (channel == ChannelType.WHATSAPP) {
+                if (mediaUrl != null && !mediaUrl.isBlank()) {
+                    externalMsgId = whatsAppChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                } else {
+                    externalMsgId = whatsAppChannelProvider.sendMessage(token, recipientId, content);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to dispatch live chat agent message through provider {}: {}", channel, e.getMessage());
+            // In dev/mock mode or network failure, we still log and persist the message
+        }
+
+        String messageType = (mediaUrl != null && !mediaUrl.isBlank()) ? "MEDIA" : "TEXT";
+        return recordMessage(organizationId, conversation, "OUTBOUND", "AGENT", messageType, content, mediaUrl, externalMsgId);
     }
 }

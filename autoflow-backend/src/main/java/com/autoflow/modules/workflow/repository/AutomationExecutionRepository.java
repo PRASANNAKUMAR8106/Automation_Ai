@@ -16,4 +16,8 @@ public interface AutomationExecutionRepository extends JpaRepository<AutomationE
     List<AutomationExecution> findByWorkflowIdOrderByStartedAtDesc(UUID workflowId);
 
     long countByOrganizationIdAndStatus(UUID organizationId, ExecutionStatus status);
+
+    long countByOrganizationId(UUID organizationId);
+
+    long countByOrganizationIdAndTriggerType(UUID organizationId, String triggerType);
 }

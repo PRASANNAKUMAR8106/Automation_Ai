@@ -1,5 +1,10 @@
 package com.autoflow.modules.crm.service;
 
+import com.autoflow.common.security.TokenEncryptionService;
+import com.autoflow.modules.channel.entity.ConnectedAccount;
+import com.autoflow.modules.channel.provider.instagram.InstagramChannelProvider;
+import com.autoflow.modules.channel.provider.whatsapp.WhatsAppChannelProvider;
+import com.autoflow.modules.channel.repository.ConnectedAccountRepository;
 import com.autoflow.modules.crm.entity.*;
 import com.autoflow.modules.crm.repository.ContactRepository;
 import com.autoflow.modules.crm.repository.ConversationRepository;
@@ -34,12 +39,32 @@ class CrmServiceTest {
     @Mock
     private MessageRepository messageRepository;
 
+    @Mock
+    private ConnectedAccountRepository connectedAccountRepository;
+
+    @Mock
+    private TokenEncryptionService tokenEncryptionService;
+
+    @Mock
+    private InstagramChannelProvider instagramChannelProvider;
+
+    @Mock
+    private WhatsAppChannelProvider whatsAppChannelProvider;
+
     private CrmServiceImpl crmService;
     private final UUID testOrgId = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
-        crmService = new CrmServiceImpl(contactRepository, conversationRepository, messageRepository);
+        crmService = new CrmServiceImpl(
+                contactRepository,
+                conversationRepository,
+                messageRepository,
+                connectedAccountRepository,
+                tokenEncryptionService,
+                instagramChannelProvider,
+                whatsAppChannelProvider
+        );
     }
 
     @Test
@@ -131,5 +156,72 @@ class CrmServiceTest {
         assertTrue(updatedTags.contains("vip"));
         assertTrue(updatedTags.contains("existing"));
         assertTrue(updatedTags.contains("new_lead"));
+    }
+
+    @Test
+    @DisplayName("Should remove contact tag")
+    void shouldRemoveContactTag() {
+        UUID contactId = UUID.randomUUID();
+        Contact contact = Contact.builder()
+                .channel(ChannelType.INSTAGRAM)
+                .externalId("ig_user_1")
+                .tags(new ArrayList<>(List.of("vip", "existing", "promo")))
+                .build();
+        contact.setId(contactId);
+        contact.setOrganizationId(testOrgId);
+
+        when(contactRepository.findById(contactId)).thenReturn(Optional.of(contact));
+        when(contactRepository.save(any(Contact.class))).thenAnswer(i -> i.getArgument(0));
+
+        crmService.removeTagFromContact(testOrgId, contactId, "promo");
+
+        ArgumentCaptor<Contact> captor = ArgumentCaptor.forClass(Contact.class);
+        verify(contactRepository).save(captor.capture());
+        List<String> updatedTags = captor.getValue().getTags();
+        assertEquals(2, updatedTags.size());
+        assertFalse(updatedTags.contains("promo"));
+    }
+
+    @Test
+    @DisplayName("Should send agent live chat reply via Instagram channel provider")
+    void shouldSendAgentReplyInstagram() {
+        UUID convoId = UUID.randomUUID();
+        Contact contact = Contact.builder().channel(ChannelType.INSTAGRAM).externalId("ig_recip_99").build();
+        contact.setId(UUID.randomUUID());
+        contact.setOrganizationId(testOrgId);
+
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.INSTAGRAM)
+                .contact(contact)
+                .build();
+        convo.setId(convoId);
+
+        ConnectedAccount account = ConnectedAccount.builder()
+                .channel(ChannelType.INSTAGRAM)
+                .encryptedAccessToken("enc_token_123")
+                .build();
+        account.setOrganizationId(testOrgId);
+
+        when(conversationRepository.findById(convoId)).thenReturn(Optional.of(convo));
+        when(connectedAccountRepository.findByOrganizationIdAndChannel(testOrgId, ChannelType.INSTAGRAM))
+                .thenReturn(Optional.of(account));
+        when(tokenEncryptionService.decrypt("enc_token_123")).thenReturn("decrypted_token");
+        when(instagramChannelProvider.sendPrivateDirectMessage(eq("decrypted_token"), eq("ig_recip_99"), eq("Hello, how can I help?")))
+                .thenReturn("ig_msg_sent_777");
+        when(messageRepository.save(any(Message.class))).thenAnswer(i -> {
+            Message m = i.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+        when(conversationRepository.save(any(Conversation.class))).thenAnswer(i -> i.getArgument(0));
+
+        Message sent = crmService.sendAgentReply(testOrgId, convoId, "Hello, how can I help?", null);
+
+        assertNotNull(sent);
+        assertEquals("AGENT", sent.getSenderType());
+        assertEquals("OUTBOUND", sent.getDirection());
+        assertEquals("ig_msg_sent_777", sent.getExternalMessageId());
+        verify(instagramChannelProvider).sendPrivateDirectMessage("decrypted_token", "ig_recip_99", "Hello, how can I help?");
     }
 }

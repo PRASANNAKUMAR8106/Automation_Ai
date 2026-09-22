@@ -13,4 +13,6 @@ public interface MessageRepository extends JpaRepository<Message, UUID> {
     List<Message> findByConversationIdOrderBySentAtAsc(UUID conversationId);
 
     long countByOrganizationId(UUID organizationId);
+
+    long countByOrganizationIdAndDirection(UUID organizationId, String direction);
 }
