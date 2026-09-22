@@ -42,3 +42,14 @@ logging:
     com.autoflow: DEBUG
     org.springframework.security: INFO
     org.hibernate.SQL: WARN
+
+autoflow:
+  channels:
+    token-encryption-key: ${CHANNEL_TOKEN_ENCRYPTION_KEY:autoflow_aes256_secret_key_32b!}
+    refresh-cron: ${CHANNEL_REFRESH_CRON:0 0 3 * * *}
+    meta:
+      app-id: ${META_APP_ID:dummy_meta_app_id}
+      app-secret: ${META_APP_SECRET:dummy_meta_app_secret}
+      redirect-uri: ${META_REDIRECT_URI:http://localhost:8080/api/v1/channels/oauth/callback/INSTAGRAM}
+      graph-api-base-url: ${META_GRAPH_API_URL:https://graph.facebook.com/v19.0}
+

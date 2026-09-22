@@ -27,3 +27,11 @@ autoflow:
   cors:
     allowed-origins:
       - "http://localhost:3000"
+  channels:
+    token-encryption-key: test_aes256_secret_key_32bytes!
+    refresh-cron: "0 0 3 * * *"
+    meta:
+      app-id: test_meta_app_id
+      app-secret: test_meta_app_secret
+      redirect-uri: http://localhost:8080/api/v1/channels/oauth/callback/INSTAGRAM
+      graph-api-base-url: https://graph.facebook.com/v19.0

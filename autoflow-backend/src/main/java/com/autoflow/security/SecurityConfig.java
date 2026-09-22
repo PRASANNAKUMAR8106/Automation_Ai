@@ -26,6 +26,7 @@ import java.util.List;
 public class SecurityConfig {
 
     private final com.autoflow.modules.auth.security.JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final List<String> allowedOrigins;
 
     public SecurityConfig(
             com.autoflow.modules.auth.security.JwtAuthenticationFilter jwtAuthenticationFilter,
