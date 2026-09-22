@@ -1,0 +1,66 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:autoflow_db}
+    username: ${DB_USER:autoflow_user}
+    password: ${DB_PASSWORD:autoflow_secure_pass_2026}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      connection-timeout: 20000
+      pool-name: AutoFlowHikariCP
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        generate_statistics: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:autoflow_redis_pass_2026}
+      timeout: ${REDIS_TIMEOUT_MS:3000}ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+
+autoflow:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:4f8b9e6a3d1c7f5b2e8a0c4d6f8a2b4c6e8f0a2d4b6c8e0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e}
+      access-token-expiration-seconds: ${JWT_ACCESS_TOKEN_EXPIRATION_SECONDS:900}
+      refresh-token-expiration-seconds: ${JWT_REFRESH_TOKEN_EXPIRATION_SECONDS:2592000}
+  cors:
+    allowed-origins:
+      - "http://localhost:3000"
+      - "http://localhost:8080"
+      - "http://127.0.0.1:3000"
+      - "http://127.0.0.1:8080"
+  s3:
+    endpoint: ${S3_ENDPOINT:http://localhost:9000}
+    region: ${S3_REGION:us-east-1}
+    access-key: ${S3_ACCESS_KEY:autoflow_minio_admin}
+    secret-key: ${S3_SECRET_KEY:autoflow_minio_secret_2026}
+    bucket-media: ${S3_BUCKET_MEDIA:autoflow-media}
+    bucket-invoices: ${S3_BUCKET_INVOICES:autoflow-invoices}
+    bucket-public: ${S3_BUCKET_PUBLIC:autoflow-public}
+  razorpay:
+    key-id: ${RAZORPAY_KEY_ID:rzp_test_placeholder}
+    key-secret: ${RAZORPAY_KEY_SECRET:secret_placeholder}
+    webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:webhook_secret_placeholder}
+  influencer:
+    attribution-window-days: ${DEFAULT_REFERRAL_ATTRIBUTION_DAYS:30}
+    commission-hold-days: ${COMMISSION_HOLD_PERIOD_DAYS:30}
+    min-payout-inr: ${MINIMUM_PAYOUT_AMOUNT_INR:1000.00}

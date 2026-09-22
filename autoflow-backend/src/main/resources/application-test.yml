@@ -1,0 +1,29 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:autoflow_test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+autoflow:
+  security:
+    jwt:
+      secret: 4f8b9e6a3d1c7f5b2e8a0c4d6f8a2b4c6e8f0a2d4b6c8e0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e
+      access-token-expiration-seconds: 300
+      refresh-token-expiration-seconds: 86400
+  cors:
+    allowed-origins:
+      - "http://localhost:3000"
