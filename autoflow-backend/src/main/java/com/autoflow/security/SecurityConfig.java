@@ -57,6 +57,7 @@ public class SecurityConfig {
                                 "/actuator/info",
                                 "/api/v1/auth/**",
                                 "/api/v1/webhooks/**",
+                                "/api/v1/billing/webhook/**",
                                 "/r/**"
                         ).permitAll()
                         // Secured by default

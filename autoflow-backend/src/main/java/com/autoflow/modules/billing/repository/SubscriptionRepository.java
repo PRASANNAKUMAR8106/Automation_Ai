@@ -10,4 +10,5 @@ import java.util.UUID;
 @Repository
 public interface SubscriptionRepository extends JpaRepository<Subscription, UUID> {
     Optional<Subscription> findByOrganizationId(UUID organizationId);
+    Optional<Subscription> findByProviderSubscriptionId(String providerSubscriptionId);
 }

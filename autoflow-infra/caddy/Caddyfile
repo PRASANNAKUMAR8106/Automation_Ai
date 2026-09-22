@@ -1,0 +1,41 @@
+{
+    email {$ACME_EMAIL:admin@autoflow.ai}
+}
+
+{$DOMAIN:localhost} {
+    encode gzip zstd
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # API and Webhook Requests -> Spring Boot Modular Monolith
+    handle /api/* {
+        reverse_proxy backend:8080 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    handle /v3/api-docs* {
+        reverse_proxy backend:8080
+    }
+
+    handle /swagger-ui* {
+        reverse_proxy backend:8080
+    }
+
+    handle /actuator/health {
+        reverse_proxy backend:8080
+    }
+
+    # All Web Client Traffic -> Flutter Web Nginx
+    handle {
+        reverse_proxy frontend:80
+    }
+}
