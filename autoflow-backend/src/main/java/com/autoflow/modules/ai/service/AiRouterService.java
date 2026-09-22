@@ -37,6 +37,10 @@ public class AiRouterService {
         return generateWithFallback(preferred, personaPrompt, incomingMessage);
     }
 
+    public String generateReply(String personaPrompt, String incomingMessage) {
+        return generateSocialReply(personaPrompt, incomingMessage);
+    }
+
     public String generateWithProvider(AiProviderType providerType, String personaPrompt, String incomingMessage) {
         return generateWithFallback(providerType, personaPrompt, incomingMessage);
     }

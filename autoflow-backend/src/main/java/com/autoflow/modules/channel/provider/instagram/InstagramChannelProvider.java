@@ -285,6 +285,94 @@ public class InstagramChannelProvider implements SocialChannelProvider {
                 .build();
     }
 
+    public String postPublicCommentReply(String pageAccessToken, String commentId, String replyMessage) {
+        if (isMockMode()) {
+            log.info("Mock mode active; simulating public comment reply to {} with text: {}", commentId, replyMessage);
+            return "mock_reply_id_" + System.currentTimeMillis();
+        }
+
+        try {
+            String response = restClient.post()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/" + commentId + "/replies")
+                            .queryParam("message", replyMessage)
+                            .queryParam("access_token", pageAccessToken)
+                            .build())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode node = objectMapper.readTree(response);
+            return node.path("id").asText("reply_" + System.currentTimeMillis());
+        } catch (Exception e) {
+            log.error("Failed to post public comment reply to {}: {}", commentId, e.getMessage());
+            throw new IllegalStateException("Failed to post public comment reply: " + e.getMessage(), e);
+        }
+    }
+
+    public String sendPrivateDirectMessage(String pageAccessToken, String recipientId, String messageText) {
+        if (isMockMode()) {
+            log.info("Mock mode active; simulating DM to {} with text: {}", recipientId, messageText);
+            return "mock_msg_id_" + System.currentTimeMillis();
+        }
+
+        try {
+            Map<String, Object> body = Map.of(
+                    "recipient", Map.of("id", recipientId),
+                    "message", Map.of("text", messageText)
+            );
+
+            String response = restClient.post()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/me/messages")
+                            .queryParam("access_token", pageAccessToken)
+                            .build())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode node = objectMapper.readTree(response);
+            return node.path("message_id").asText("mid_" + System.currentTimeMillis());
+        } catch (Exception e) {
+            log.error("Failed to send private DM to {}: {}", recipientId, e.getMessage());
+            throw new IllegalStateException("Failed to send private DM: " + e.getMessage(), e);
+        }
+    }
+
+    public String sendMediaMessage(String pageAccessToken, String recipientId, String mediaType, String mediaUrl) {
+        if (isMockMode()) {
+            log.info("Mock mode active; simulating media DM ({}) to {} with url: {}", mediaType, recipientId, mediaUrl);
+            return "mock_media_msg_id_" + System.currentTimeMillis();
+        }
+
+        try {
+            Map<String, Object> body = Map.of(
+                    "recipient", Map.of("id", recipientId),
+                    "message", Map.of("attachment", Map.of(
+                            "type", mediaType.toLowerCase(),
+                            "payload", Map.of("url", mediaUrl, "is_reusable", true)
+                    ))
+            );
+
+            String response = restClient.post()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/me/messages")
+                            .queryParam("access_token", pageAccessToken)
+                            .build())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode node = objectMapper.readTree(response);
+            return node.path("message_id").asText("mid_" + System.currentTimeMillis());
+        } catch (Exception e) {
+            log.error("Failed to send media DM to {}: {}", recipientId, e.getMessage());
+            throw new IllegalStateException("Failed to send media DM: " + e.getMessage(), e);
+        }
+    }
+
     private boolean isMockMode() {
         return appId == null || appId.startsWith("dummy") || appId.startsWith("test");
     }

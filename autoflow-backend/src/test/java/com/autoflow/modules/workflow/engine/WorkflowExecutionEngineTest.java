@@ -1,0 +1,157 @@
+package com.autoflow.modules.workflow.engine;
+
+import com.autoflow.modules.ai.service.AiRouterService;
+import com.autoflow.modules.channel.provider.instagram.InstagramChannelProvider;
+import com.autoflow.modules.crm.entity.ChannelType;
+import com.autoflow.modules.crm.entity.Contact;
+import com.autoflow.modules.crm.entity.Conversation;
+import com.autoflow.modules.crm.service.CrmService;
+import com.autoflow.modules.workflow.entity.AutomationExecution;
+import com.autoflow.modules.workflow.entity.ExecutionStatus;
+import com.autoflow.modules.workflow.entity.Workflow;
+import com.autoflow.modules.workflow.entity.WorkflowVersion;
+import com.autoflow.modules.workflow.repository.AutomationExecutionRepository;
+import com.autoflow.modules.workflow.repository.WorkflowRepository;
+import com.autoflow.modules.workflow.repository.WorkflowVersionRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.List;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+@DisplayName("Workflow Execution Engine DAG Runner Tests")
+class WorkflowExecutionEngineTest {
+
+    @Mock
+    private WorkflowRepository workflowRepository;
+
+    @Mock
+    private WorkflowVersionRepository workflowVersionRepository;
+
+    @Mock
+    private AutomationExecutionRepository automationExecutionRepository;
+
+    @Mock
+    private WorkflowTriggerEvaluator triggerEvaluator;
+
+    @Mock
+    private InstagramChannelProvider instagramChannelProvider;
+
+    @Mock
+    private AiRouterService aiRouterService;
+
+    @Mock
+    private CrmService crmService;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private WorkflowExecutionEngineImpl executionEngine;
+
+    private final UUID testOrgId = UUID.randomUUID();
+
+    @BeforeEach
+    void setUp() {
+        executionEngine = new WorkflowExecutionEngineImpl(
+                workflowRepository,
+                workflowVersionRepository,
+                automationExecutionRepository,
+                triggerEvaluator,
+                instagramChannelProvider,
+                aiRouterService,
+                crmService,
+                objectMapper
+        );
+    }
+
+    @Test
+    @DisplayName("Should execute multi-step DAG actions in topological sequence")
+    void shouldExecuteMultiStepDag() {
+        UUID workflowId = UUID.randomUUID();
+        Workflow workflow = Workflow.builder().name("Lead Magnet").status("PUBLISHED").activeVersionNumber(1).build();
+        workflow.setId(workflowId);
+        workflow.setOrganizationId(testOrgId);
+
+        String dagJson = """
+                {
+                    "nodes": [
+                        {"id": "n1", "type": "TRIGGER_INSTAGRAM_COMMENT", "config": {"keywords": ["GUIDE"]}},
+                        {"id": "n2", "type": "ACTION_PUBLIC_COMMENT_REPLY", "config": {"reply": "Hi @{{username}}, check your DM!"}},
+                        {"id": "n3", "type": "ACTION_SEND_DM", "config": {"message": "Here is the download link, {{username}}!"}},
+                        {"id": "n4", "type": "ACTION_AI_REPLY", "config": {"system_prompt": "You are a brand assistant"}},
+                        {"id": "n5", "type": "ACTION_SEND_MEDIA", "config": {"asset_type": "PDF", "media_url": "https://s3.autoflow.ai/guide.pdf"}},
+                        {"id": "n6", "type": "ACTION_TAG_CONTACT", "config": {"tags": ["lead", "guide_requester"]}}
+                    ],
+                    "edges": [
+                        {"from": "n1", "to": "n2"},
+                        {"from": "n2", "to": "n3"},
+                        {"from": "n3", "to": "n4"},
+                        {"from": "n4", "to": "n5"},
+                        {"from": "n5", "to": "n6"}
+                    ]
+                }
+                """;
+
+        WorkflowVersion version = WorkflowVersion.builder().workflow(workflow).versionNumber(1).graphDefinition(dagJson).build();
+
+        InboundEventContext event = InboundEventContext.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.INSTAGRAM)
+                .eventType("COMMENT")
+                .externalAccountId("17841405822304914")
+                .contactExternalId("ig_user_123")
+                .username("john_doe")
+                .commentId("comment_999")
+                .commentText("I want the GUIDE")
+                .pageAccessToken("mock_page_token")
+                .build();
+
+        Contact mockContact = Contact.builder().channel(ChannelType.INSTAGRAM).externalId("ig_user_123").build();
+        mockContact.setId(UUID.randomUUID());
+        mockContact.setOrganizationId(testOrgId);
+        Conversation mockConversation = Conversation.builder().organizationId(testOrgId).contact(mockContact).build();
+
+        when(crmService.getOrCreateContact(eq(testOrgId), eq(ChannelType.INSTAGRAM), eq("ig_user_123"), any(), any()))
+                .thenReturn(mockContact);
+        when(crmService.getOrCreateConversation(eq(testOrgId), eq(mockContact))).thenReturn(mockConversation);
+
+        when(instagramChannelProvider.postPublicCommentReply(eq("mock_page_token"), eq("comment_999"), eq("Hi @john_doe, check your DM!")))
+                .thenReturn("reply_111");
+        when(instagramChannelProvider.sendPrivateDirectMessage(eq("mock_page_token"), eq("ig_user_123"), eq("Here is the download link, john_doe!")))
+                .thenReturn("dm_222");
+        when(aiRouterService.generateReply(anyString(), anyString())).thenReturn("AI reply message");
+        when(instagramChannelProvider.sendPrivateDirectMessage(eq("mock_page_token"), eq("ig_user_123"), eq("AI reply message")))
+                .thenReturn("dm_333");
+        when(instagramChannelProvider.sendMediaMessage(eq("mock_page_token"), eq("ig_user_123"), eq("PDF"), eq("https://s3.autoflow.ai/guide.pdf")))
+                .thenReturn("media_444");
+
+        when(automationExecutionRepository.save(any(AutomationExecution.class))).thenAnswer(i -> {
+            AutomationExecution ex = i.getArgument(0);
+            if (ex.getId() == null) ex.setId(UUID.randomUUID());
+            return ex;
+        });
+
+        // Execute workflow
+        AutomationExecution result = executionEngine.executeWorkflow(workflow, version, event);
+
+        // Verify actions executed
+        verify(instagramChannelProvider).postPublicCommentReply("mock_page_token", "comment_999", "Hi @john_doe, check your DM!");
+        verify(instagramChannelProvider, atLeastOnce()).sendPrivateDirectMessage(eq("mock_page_token"), eq("ig_user_123"), anyString());
+        verify(aiRouterService).generateReply("You are a brand assistant", "I want the GUIDE");
+        verify(instagramChannelProvider).sendMediaMessage("mock_page_token", "ig_user_123", "PDF", "https://s3.autoflow.ai/guide.pdf");
+        verify(crmService).addTagsToContact(eq(testOrgId), eq(mockContact.getId()), eq(List.of("lead", "guide_requester")));
+
+        assertEquals(ExecutionStatus.SUCCESS, result.getStatus());
+        assertNotNull(result.getCompletedAt());
+        assertNull(result.getErrorMessage());
+    }
+}
