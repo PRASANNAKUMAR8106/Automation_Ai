@@ -20,6 +20,8 @@ desktop.ini
 *.keystore
 *.jks
 *.p12
+key.properties
+*/key.properties
 *.pfx
 *.crt
 *.cert

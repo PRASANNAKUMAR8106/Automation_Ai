@@ -30,6 +30,7 @@ public class CrmServiceImpl implements CrmService {
     private final TokenEncryptionService tokenEncryptionService;
     private final InstagramChannelProvider instagramChannelProvider;
     private final WhatsAppChannelProvider whatsAppChannelProvider;
+    private final com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider telegramChannelProvider;
 
     @Override
     @Transactional
@@ -213,6 +214,12 @@ public class CrmServiceImpl implements CrmService {
                     externalMsgId = whatsAppChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
                 } else {
                     externalMsgId = whatsAppChannelProvider.sendMessage(token, recipientId, content);
+                }
+            } else if (channel == ChannelType.TELEGRAM) {
+                if (mediaUrl != null && !mediaUrl.isBlank()) {
+                    externalMsgId = telegramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                } else {
+                    externalMsgId = telegramChannelProvider.sendMessage(token, recipientId, content);
                 }
             }
         } catch (Exception e) {

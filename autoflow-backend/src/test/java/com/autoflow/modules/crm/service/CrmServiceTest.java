@@ -51,6 +51,9 @@ class CrmServiceTest {
     @Mock
     private WhatsAppChannelProvider whatsAppChannelProvider;
 
+    @Mock
+    private com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider telegramChannelProvider;
+
     private CrmServiceImpl crmService;
     private final UUID testOrgId = UUID.randomUUID();
 
@@ -63,7 +66,8 @@ class CrmServiceTest {
                 connectedAccountRepository,
                 tokenEncryptionService,
                 instagramChannelProvider,
-                whatsAppChannelProvider
+                whatsAppChannelProvider,
+                telegramChannelProvider
         );
     }
 
@@ -223,5 +227,52 @@ class CrmServiceTest {
         assertEquals("OUTBOUND", sent.getDirection());
         assertEquals("ig_msg_sent_777", sent.getExternalMessageId());
         verify(instagramChannelProvider).sendPrivateDirectMessage("decrypted_token", "ig_recip_99", "Hello, how can I help?");
+    }
+
+    @Test
+    @DisplayName("Should dispatch agent reply via Telegram channel")
+    void shouldSendAgentReplyViaTelegram() {
+        UUID convoId = UUID.randomUUID();
+        Contact contact = Contact.builder()
+                .channel(ChannelType.TELEGRAM)
+                .externalId("123456789")
+                .username("tg_customer")
+                .build();
+        contact.setId(UUID.randomUUID());
+        contact.setOrganizationId(testOrgId);
+
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.TELEGRAM)
+                .contact(contact)
+                .build();
+        convo.setId(convoId);
+
+        ConnectedAccount account = ConnectedAccount.builder()
+                .channel(ChannelType.TELEGRAM)
+                .encryptedAccessToken("enc_tg_token_123")
+                .build();
+        account.setOrganizationId(testOrgId);
+
+        when(conversationRepository.findById(convoId)).thenReturn(Optional.of(convo));
+        when(connectedAccountRepository.findByOrganizationIdAndChannel(testOrgId, ChannelType.TELEGRAM))
+                .thenReturn(Optional.of(account));
+        when(tokenEncryptionService.decrypt("enc_tg_token_123")).thenReturn("bot_token_abc");
+        when(telegramChannelProvider.sendMessage(eq("bot_token_abc"), eq("123456789"), eq("Hello on Telegram!")))
+                .thenReturn("tg_msg_888");
+        when(messageRepository.save(any(Message.class))).thenAnswer(i -> {
+            Message m = i.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+        when(conversationRepository.save(any(Conversation.class))).thenAnswer(i -> i.getArgument(0));
+
+        Message sent = crmService.sendAgentReply(testOrgId, convoId, "Hello on Telegram!", null);
+
+        assertNotNull(sent);
+        assertEquals("AGENT", sent.getSenderType());
+        assertEquals("OUTBOUND", sent.getDirection());
+        assertEquals("tg_msg_888", sent.getExternalMessageId());
+        verify(telegramChannelProvider).sendMessage("bot_token_abc", "123456789", "Hello on Telegram!");
     }
 }

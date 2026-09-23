@@ -52,4 +52,9 @@ autoflow:
       app-secret: ${META_APP_SECRET:dummy_meta_app_secret}
       redirect-uri: ${META_REDIRECT_URI:http://localhost:8080/api/v1/channels/oauth/callback/INSTAGRAM}
       graph-api-base-url: ${META_GRAPH_API_URL:https://graph.facebook.com/v19.0}
+    telegram:
+      bot-token: ${TELEGRAM_BOT_TOKEN:dummy_telegram_bot_token}
+      bot-username: ${TELEGRAM_BOT_USERNAME:autoflow_demo_bot}
+      webhook-secret: ${TELEGRAM_WEBHOOK_SECRET:autoflow_telegram_secret_2026}
+      api-base-url: ${TELEGRAM_API_BASE_URL:https://api.telegram.org}
 
