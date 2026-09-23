@@ -39,6 +39,57 @@ public class CrmController {
         return ResponseEntity.ok(ApiResponse.ok("Contacts retrieved successfully", response));
     }
 
+    @GetMapping(value = "/contacts/export", produces = "text/csv")
+    @Operation(summary = "Export Contacts as CSV", description = "Streams RFC-4180 formatted CSV of all organization contacts with sanitization")
+    public ResponseEntity<String> exportContacts(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String tag
+    ) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        List<Contact> contacts = crmService.getContacts(orgId, search, tag);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Contact ID,Channel,External ID,Username,Full Name,Email,Phone,Lead Status,Tags,Created At,Last Interaction\r\n");
+
+        for (Contact c : contacts) {
+            String tags = (c.getTags() != null) ? String.join(";", c.getTags()) : "";
+            sb.append(escapeCsv(c.getId() != null ? c.getId().toString() : "")).append(",")
+              .append(escapeCsv(c.getChannel() != null ? c.getChannel().name() : "")).append(",")
+              .append(escapeCsv(c.getExternalId())).append(",")
+              .append(escapeCsv(c.getUsername())).append(",")
+              .append(escapeCsv(c.getFullName())).append(",")
+              .append(escapeCsv(c.getEmail())).append(",")
+              .append(escapeCsv(c.getPhone())).append(",")
+              .append(escapeCsv(c.getLeadStatus() != null ? c.getLeadStatus().name() : "")).append(",")
+              .append(escapeCsv(tags)).append(",")
+              .append(escapeCsv(c.getCreatedAt() != null ? c.getCreatedAt().toString() : "")).append(",")
+              .append(escapeCsv(c.getLastInteractionAt() != null ? c.getLastInteractionAt().toString() : ""))
+              .append("\r\n");
+        }
+
+        String filename = "autoflow-contacts-" + System.currentTimeMillis() + ".csv";
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, "text/csv; charset=UTF-8")
+                .body(sb.toString());
+    }
+
+    private String escapeCsv(String value) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        String sanitized = value;
+        if (!trimmed.isEmpty()) {
+            char first = trimmed.charAt(0);
+            if (first == '=' || first == '+' || first == '-' || first == '@' || first == '\t' || first == '\r') {
+                sanitized = "'" + sanitized;
+            }
+        }
+        if (sanitized.contains(",") || sanitized.contains("\"") || sanitized.contains("\n") || sanitized.contains("\r")) {
+            return "\"" + sanitized.replace("\"", "\"\"") + "\"";
+        }
+        return sanitized;
+    }
+
     @GetMapping("/contacts/{id}")
     @Operation(summary = "Get Contact Details", description = "Retrieves full contact profile and tags")
     public ResponseEntity<ApiResponse<ContactResponse>> getContact(@PathVariable UUID id) {

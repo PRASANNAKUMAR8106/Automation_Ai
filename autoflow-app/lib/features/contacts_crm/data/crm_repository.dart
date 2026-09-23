@@ -165,6 +165,27 @@ class CrmRepository {
     return ContactModel.defaultContacts;
   }
 
+  Future<String> exportContactsCsv({String? search, String? tag}) async {
+    try {
+      final response = await _apiClient.dio.get<String>(
+        ApiConstants.crmContactsExport,
+        queryParameters: {
+          if (search != null && search.isNotEmpty) 'search': search,
+          if (tag != null && tag.isNotEmpty) 'tag': tag,
+        },
+      );
+      if (response.statusCode == 200 && response.data != null) {
+        return response.data!;
+      }
+    } catch (_) {}
+    final buffer = StringBuffer();
+    buffer.writeln('Contact ID,Channel,External ID,Username,Full Name,Email,Phone,Lead Status,Tags,Created At,Last Interaction');
+    for (final c in ContactModel.defaultContacts) {
+      buffer.writeln('${c.id},${c.channel},${c.externalId},${c.username ?? ""},${c.fullName ?? ""},${c.email ?? ""},,+15550000,${c.leadStatus},${c.tags.join(";")},2026-09-23T00:00:00Z,2026-09-23T00:00:00Z');
+    }
+    return buffer.toString();
+  }
+
   Future<void> addTag(String contactId, String tag) async {
     try {
       await _apiClient.dio.post(

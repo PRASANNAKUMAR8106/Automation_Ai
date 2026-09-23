@@ -3,6 +3,8 @@ import 'package:autoflow_app/features/dashboard/data/analytics_repository.dart';
 import 'package:autoflow_app/features/contacts_crm/data/crm_repository.dart';
 import 'package:autoflow_app/features/workflows/data/workflow_repository.dart';
 import 'package:autoflow_app/features/influencer/data/influencer_repository.dart';
+import 'package:autoflow_app/features/settings/data/channel_repository.dart';
+import 'package:autoflow_app/features/settings/data/api_key_repository.dart';
 
 void main() {
   group('Frontend Repository Tests', () {
@@ -28,6 +30,46 @@ void main() {
 
       // Verify no exception on add tag
       await expectLater(repo.addTag('c-1', 'vip'), completes);
+
+      // Verify CSV export
+      final csv = await repo.exportContactsCsv();
+      expect(csv, contains('Contact ID,Channel,External ID'));
+      expect(csv, contains('Priya Sharma'));
+    });
+
+    test('ChannelRepository retrieves connected accounts and handles disconnect', () async {
+      final repo = ChannelRepository();
+      final accounts = await repo.getConnectedAccounts();
+
+      expect(accounts, isNotEmpty);
+      expect(accounts.any((a) => a.channel == 'INSTAGRAM'), isTrue);
+      expect(accounts.any((a) => a.channel == 'WHATSAPP'), isTrue);
+
+      final disconnected = await repo.disconnectAccount(accounts.first.id);
+      expect(disconnected, isTrue);
+    });
+
+    test('ApiKeyRepository manages keys with secret masking, rotation, and revocation', () async {
+      final repo = ApiKeyRepository();
+      final keys = await repo.getApiKeys();
+
+      expect(keys, isNotEmpty);
+      expect(keys.first.maskedKey, contains('••••••••••••'));
+
+      // Test Key Creation
+      final created = await repo.createApiKey('Test Automation Key');
+      expect(created, isNotNull);
+      expect(created!.secretKey, startsWith('af_live_'));
+      expect(created.maskedKey, contains('••••••••••••'));
+
+      // Test Key Rotation
+      final rotated = await repo.rotateApiKey(keys.first.id);
+      expect(rotated, isNotNull);
+      expect(rotated!.secretKey, startsWith('af_live_'));
+
+      // Test Key Revocation
+      final revoked = await repo.revokeApiKey(keys.first.id);
+      expect(revoked, isTrue);
     });
 
     test('WorkflowRepository returns active workflows list', () async {

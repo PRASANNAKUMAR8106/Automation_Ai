@@ -29,6 +29,7 @@ class ApiConstants {
 
   // CRM & Live Chat Inbox
   static const String crmContacts = '/api/v1/crm/contacts';
+  static const String crmContactsExport = '/api/v1/crm/contacts/export';
   static String crmContact(String id) => '/api/v1/crm/contacts/$id';
   static String crmContactTags(String id) => '/api/v1/crm/contacts/$id/tags';
   static String crmContactTag(String id, String tag) => '/api/v1/crm/contacts/$id/tags/$tag';
@@ -48,7 +49,15 @@ class ApiConstants {
 
   // Channels
   static const String channelAccounts = '/api/v1/channels/accounts';
+  static const String channelsConnected = '/api/v1/channels/connected';
+  static String channelDisconnect(String id) => '/api/v1/channels/connected/$id';
   static String channelOAuth(String channel) => '/api/v1/channels/oauth/initiate/$channel';
+  static String channelOAuthConnect(String channel) => '/api/v1/channels/oauth/connect/$channel';
+
+  // Settings & API Keys
+  static const String apiKeys = '/api/v1/settings/api-keys';
+  static String apiKeyRotate(String id) => '/api/v1/settings/api-keys/$id/rotate';
+  static String apiKeyRevoke(String id) => '/api/v1/settings/api-keys/$id';
 
   // Timeouts
   static const Duration connectTimeout = Duration(seconds: 15);

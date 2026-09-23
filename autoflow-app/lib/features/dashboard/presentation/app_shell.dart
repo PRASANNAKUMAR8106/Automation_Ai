@@ -18,6 +18,7 @@ class AppShell extends ConsumerWidget {
     if (location.startsWith('/contacts')) return 3;
     if (location.startsWith('/influencer')) return 4;
     if (location.startsWith('/billing')) return 5;
+    if (location.startsWith('/settings')) return 6;
     return 0;
   }
 
@@ -40,6 +41,9 @@ class AppShell extends ConsumerWidget {
         break;
       case 5:
         context.go('/billing');
+        break;
+      case 6:
+        context.go('/settings');
         break;
     }
   }
@@ -86,6 +90,7 @@ class AppShell extends ConsumerWidget {
                 NavigationRailDestination(icon: Icon(Icons.people_outline), selectedIcon: Icon(Icons.people), label: Text('Contacts')),
                 NavigationRailDestination(icon: Icon(Icons.discount_outlined), selectedIcon: Icon(Icons.discount), label: Text('Referrals')),
                 NavigationRailDestination(icon: Icon(Icons.credit_card_outlined), selectedIcon: Icon(Icons.credit_card), label: Text('Billing')),
+                NavigationRailDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: Text('Settings')),
               ],
             ),
 
@@ -143,7 +148,9 @@ class AppShell extends ConsumerWidget {
                           ),
                         ),
                         onSelected: (val) {
-                          if (val == 'logout') {
+                          if (val == 'settings') {
+                            context.go('/settings');
+                          } else if (val == 'logout') {
                             ref.read(authStateNotifierProvider.notifier).logout();
                             context.go('/login');
                           }
@@ -160,6 +167,16 @@ class AppShell extends ConsumerWidget {
                             ),
                           ),
                           const PopupMenuDivider(),
+                          const PopupMenuItem(
+                            value: 'settings',
+                            child: Row(
+                              children: [
+                                Icon(Icons.settings_outlined, size: 18),
+                                SizedBox(width: 8),
+                                Text('Settings'),
+                              ],
+                            ),
+                          ),
                           const PopupMenuItem(
                             value: 'logout',
                             child: Row(
@@ -199,6 +216,7 @@ class AppShell extends ConsumerWidget {
                 BottomNavigationBarItem(icon: Icon(Icons.people_outline), label: 'Contacts'),
                 BottomNavigationBarItem(icon: Icon(Icons.discount_outlined), label: 'Referrals'),
                 BottomNavigationBarItem(icon: Icon(Icons.credit_card_outlined), label: 'Billing'),
+                BottomNavigationBarItem(icon: Icon(Icons.settings_outlined), label: 'Settings'),
               ],
             ),
     );

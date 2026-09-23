@@ -28,13 +28,13 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(
         controllers = CrmController.class,
@@ -214,5 +214,72 @@ class CrmControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.senderType").value("AGENT"))
                 .andExpect(jsonPath("$.data.content").value("Hi Sarah, here is your coupon code!"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/crm/contacts/export returns streaming CSV with headers and rows")
+    void testExportContactsCsv_Success() throws Exception {
+        UUID contactId = UUID.randomUUID();
+        Contact contact = Contact.builder()
+                .channel(ChannelType.INSTAGRAM)
+                .externalId("user_101")
+                .username("sarah_fit")
+                .fullName("Sarah Fitness")
+                .email("sarah@example.com")
+                .phone("+15551234")
+                .tags(List.of("lead", "vip"))
+                .build();
+        contact.setId(contactId);
+
+        when(crmService.getContacts(eq(testOrgId), any(), any())).thenReturn(List.of(contact));
+
+        mockMvc.perform(get("/api/v1/crm/contacts/export"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", containsString("text/csv")))
+                .andExpect(header().string("Content-Disposition", containsString("attachment; filename=\"autoflow-contacts-")))
+                .andExpect(content().string(containsString("Contact ID,Channel,External ID,Username,Full Name,Email,Phone,Lead Status,Tags,Created At,Last Interaction")))
+                .andExpect(content().string(containsString(contactId.toString())))
+                .andExpect(content().string(containsString("INSTAGRAM")))
+                .andExpect(content().string(containsString("sarah_fit")))
+                .andExpect(content().string(containsString("lead;vip")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/crm/contacts/export sanitizes spreadsheet formula injection")
+    void testExportContactsCsv_FormulaSanitization() throws Exception {
+        Contact dangerousContact = Contact.builder()
+                .channel(ChannelType.WHATSAPP)
+                .externalId("victim_99")
+                .username("=SUM(A1:A10)")
+                .fullName("+cmd|' /C calc'!A0")
+                .email("@evil_domain.com")
+                .phone("-123456789")
+                .tags(List.of("tag,with,comma", "tag\"with\"quotes"))
+                .build();
+        dangerousContact.setId(UUID.randomUUID());
+
+        when(crmService.getContacts(eq(testOrgId), any(), any())).thenReturn(List.of(dangerousContact));
+
+        mockMvc.perform(get("/api/v1/crm/contacts/export"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("'=SUM(A1:A10)")))
+                .andExpect(content().string(containsString("'+cmd|' /C calc'!A0")))
+                .andExpect(content().string(containsString("'@evil_domain.com")))
+                .andExpect(content().string(containsString("'-123456789")))
+                .andExpect(content().string(containsString("\"tag,with,comma;tag\"\"with\"\"quotes\"")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/crm/contacts/export propagates search and tag filters")
+    void testExportContactsCsv_FilteredBySearchAndTag() throws Exception {
+        when(crmService.getContacts(eq(testOrgId), eq("vip"), eq("lead"))).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/crm/contacts/export")
+                        .param("search", "vip")
+                        .param("tag", "lead"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Contact ID,Channel,External ID,Username,Full Name,Email,Phone,Lead Status,Tags,Created At,Last Interaction")));
+
+        verify(crmService).getContacts(testOrgId, "vip", "lead");
     }
 }

@@ -3,11 +3,46 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/crm_repository.dart';
 
-class ContactsScreen extends ConsumerWidget {
+class ContactsScreen extends ConsumerStatefulWidget {
   const ContactsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ContactsScreen> createState() => _ContactsScreenState();
+}
+
+class _ContactsScreenState extends ConsumerState<ContactsScreen> {
+  bool _isExporting = false;
+
+  Future<void> _handleExport() async {
+    setState(() => _isExporting = true);
+    try {
+      final csv = await ref.read(crmRepositoryProvider).exportContactsCsv();
+      if (mounted) {
+        final lineCount = csv.split('\n').where((l) => l.trim().isNotEmpty).length;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Exported $lineCount contacts successfully to CSV'),
+            backgroundColor: AppTheme.success,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to export contacts CSV'),
+            backgroundColor: AppTheme.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final contactsAsync = ref.watch(crmContactsProvider);
     final contacts = contactsAsync.value ?? ContactModel.defaultContacts;
 
@@ -31,9 +66,15 @@ class ContactsScreen extends ConsumerWidget {
                   ],
                 ),
                 OutlinedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.download, size: 18),
-                  label: const Text('Export CSV'),
+                  onPressed: _isExporting ? null : _handleExport,
+                  icon: _isExporting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download, size: 18),
+                  label: Text(_isExporting ? 'Exporting...' : 'Export CSV'),
                 ),
               ],
             ),

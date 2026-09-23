@@ -10,6 +10,7 @@ import '../features/dashboard/presentation/app_shell.dart';
 import '../features/dashboard/presentation/dashboard_screen.dart';
 import '../features/inbox/presentation/inbox_screen.dart';
 import '../features/influencer/presentation/influencer_dashboard_screen.dart';
+import '../features/settings/presentation/settings_screen.dart';
 import '../features/workflow_builder/presentation/workflow_builder_screen.dart';
 import '../features/workflows/presentation/workflow_list_screen.dart';
 
@@ -87,6 +88,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/billing',
             builder: (context, state) => const BillingScreen(),
+          ),
+          GoRoute(
+            path: '/settings',
+            builder: (context, state) => const SettingsScreen(),
           ),
         ],
       ),
