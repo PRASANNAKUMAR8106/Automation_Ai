@@ -6,6 +6,7 @@ import com.autoflow.modules.channel.entity.ConnectedAccount;
 import com.autoflow.modules.channel.provider.instagram.InstagramChannelProvider;
 import com.autoflow.modules.channel.provider.whatsapp.WhatsAppChannelProvider;
 import com.autoflow.modules.channel.repository.ConnectedAccountRepository;
+import com.autoflow.modules.crm.dto.CrmDto;
 import com.autoflow.modules.crm.entity.*;
 import com.autoflow.modules.crm.repository.ContactRepository;
 import com.autoflow.modules.crm.repository.ConversationRepository;
@@ -31,6 +32,8 @@ public class CrmServiceImpl implements CrmService {
     private final InstagramChannelProvider instagramChannelProvider;
     private final WhatsAppChannelProvider whatsAppChannelProvider;
     private final com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider telegramChannelProvider;
+    private final MessagingWindowService messagingWindowService;
+    private final LiveChatStreamService liveChatStreamService;
 
     @Override
     @Transactional
@@ -89,8 +92,33 @@ public class CrmServiceImpl implements CrmService {
                 .build();
 
         msg = messageRepository.save(msg);
-        conversation.setLastMessageAt(Instant.now());
+
+        // Update conversation timestamps
+        Instant now = Instant.now();
+        conversation.setLastMessageAt(now);
+        if ("INBOUND".equalsIgnoreCase(direction) && "CONTACT".equalsIgnoreCase(senderType)) {
+            conversation.setLastCustomerMessageAt(now);
+        }
         conversationRepository.save(conversation);
+
+        // Broadcast real-time SSE event to conversation subscribers and tenant inbox
+        try {
+            CrmDto.MessageResponse msgResponse = CrmDto.MessageResponse.builder()
+                    .id(msg.getId())
+                    .conversationId(conversation.getId())
+                    .direction(msg.getDirection())
+                    .senderType(msg.getSenderType())
+                    .messageType(msg.getMessageType())
+                    .content(msg.getContent())
+                    .mediaUrl(msg.getMediaUrl())
+                    .deliveryStatus(msg.getDeliveryStatus())
+                    .sentAt(msg.getSentAt())
+                    .build();
+            liveChatStreamService.broadcastMessage(organizationId, conversation.getId(), msgResponse);
+        } catch (Exception e) {
+            log.warn("Failed to broadcast live chat message event: {}", e.getMessage());
+        }
+
         return msg;
     }
 
@@ -185,7 +213,17 @@ public class CrmServiceImpl implements CrmService {
     @Override
     @Transactional
     public Message sendAgentReply(UUID organizationId, UUID conversationId, String content, String mediaUrl) {
+        return sendAgentReply(organizationId, conversationId, content, mediaUrl, false);
+    }
+
+    @Override
+    @Transactional
+    public Message sendAgentReply(UUID organizationId, UUID conversationId, String content, String mediaUrl, boolean humanAgentTag) {
         Conversation conversation = getConversationById(organizationId, conversationId);
+
+        // Validate Meta / WhatsApp 24-hour compliance
+        messagingWindowService.validateCanSend(conversation, humanAgentTag);
+
         Contact contact = conversation.getContact();
         ChannelType channel = conversation.getChannel();
         String recipientId = contact.getExternalId();
@@ -229,5 +267,16 @@ public class CrmServiceImpl implements CrmService {
 
         String messageType = (mediaUrl != null && !mediaUrl.isBlank()) ? "MEDIA" : "TEXT";
         return recordMessage(organizationId, conversation, "OUTBOUND", "AGENT", messageType, content, mediaUrl, externalMsgId);
+    }
+
+    @Override
+    @Transactional
+    public Conversation resolveConversation(UUID organizationId, UUID conversationId, boolean resolved) {
+        Conversation conversation = getConversationById(organizationId, conversationId);
+        conversation.setResolved(resolved);
+        Conversation saved = conversationRepository.save(conversation);
+        liveChatStreamService.broadcastConversationResolved(organizationId, conversationId, resolved);
+        log.info("Conversation [{}] resolved status updated to [{}] for org [{}]", conversationId, resolved, organizationId);
+        return saved;
     }
 }

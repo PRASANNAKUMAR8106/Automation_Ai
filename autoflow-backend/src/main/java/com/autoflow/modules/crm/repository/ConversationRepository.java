@@ -14,5 +14,7 @@ public interface ConversationRepository extends JpaRepository<Conversation, UUID
 
     Optional<Conversation> findByOrganizationIdAndContactIdAndChannel(UUID organizationId, UUID contactId, ChannelType channel);
 
+    Optional<Conversation> findByIdAndOrganizationId(UUID id, UUID organizationId);
+
     List<Conversation> findByOrganizationIdOrderByLastMessageAtDesc(UUID organizationId);
 }

@@ -39,4 +39,7 @@ public class Conversation extends BaseEntity {
     @Column(name = "last_message_at", nullable = false)
     @Builder.Default
     private Instant lastMessageAt = Instant.now();
+
+    @Column(name = "last_customer_message_at")
+    private Instant lastCustomerMessageAt;
 }

@@ -12,8 +12,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.UUID;
@@ -26,6 +28,8 @@ import java.util.UUID;
 public class CrmController {
 
     private final CrmService crmService;
+    private final com.autoflow.modules.crm.service.MessagingWindowService messagingWindowService;
+    private final com.autoflow.modules.crm.service.LiveChatStreamService liveChatStreamService;
 
     @GetMapping("/contacts")
     @Operation(summary = "List Contacts", description = "Query CRM contacts with optional keyword search and tag filter")
@@ -153,8 +157,56 @@ public class CrmController {
             @Valid @RequestBody SendAgentReplyRequest request
     ) {
         UUID orgId = TenantContext.getRequiredTenantId();
-        Message sent = crmService.sendAgentReply(orgId, id, request.getContent(), request.getMediaUrl());
+        Message sent = crmService.sendAgentReply(orgId, id, request.getContent(), request.getMediaUrl(), request.isHumanAgentTag());
         return ResponseEntity.ok(ApiResponse.ok("Agent reply sent successfully", toMessageResponse(sent)));
+    }
+
+    @GetMapping(value = "/conversations/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "Stream Conversation Events", description = "Subscribes to real-time incoming messages, agent replies, and status updates via SSE")
+    public SseEmitter streamConversation(@PathVariable UUID id) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        crmService.getConversationById(orgId, id); // Assert existence and tenant boundary
+        return liveChatStreamService.subscribeToConversation(orgId, id);
+    }
+
+    @GetMapping(value = "/stream/inbox", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "Stream Tenant Inbox Events", description = "Subscribes to tenant-wide new message alerts and inbox badge updates via SSE")
+    public SseEmitter streamInbox() {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        return liveChatStreamService.subscribeToTenantInbox(orgId);
+    }
+
+    @GetMapping("/conversations/{id}/window-status")
+    @Operation(summary = "Get Meta 24-Hour Window Status", description = "Calculates remaining seconds and policy compliance for customer messaging window")
+    public ResponseEntity<ApiResponse<MessagingWindowResponse>> getWindowStatus(@PathVariable UUID id) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        MessagingWindowResponse response = messagingWindowService.getWindowStatus(orgId, id);
+        return ResponseEntity.ok(ApiResponse.ok("Window status retrieved", response));
+    }
+
+    @PostMapping("/conversations/{id}/typing")
+    @Operation(summary = "Broadcast Typing Status", description = "Broadcasts operator typing indicator to conversation subscribers")
+    public ResponseEntity<ApiResponse<Void>> broadcastTyping(
+            @PathVariable UUID id,
+            @RequestBody TypingIndicatorRequest request
+    ) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        crmService.getConversationById(orgId, id); // Verify tenant access
+        liveChatStreamService.broadcastTyping(orgId, id, request.isTyping());
+        return ResponseEntity.ok(ApiResponse.ok("Typing status broadcasted", null));
+    }
+
+    @PostMapping("/conversations/{id}/resolve")
+    @Operation(summary = "Resolve or Reopen Conversation", description = "Toggles resolution status of a customer conversation thread")
+    public ResponseEntity<ApiResponse<ConversationResponse>> resolveConversation(
+            @PathVariable UUID id,
+            @RequestBody ResolveConversationRequest request
+    ) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        Conversation resolved = crmService.resolveConversation(orgId, id, request.isResolved());
+        List<Message> messages = crmService.getMessages(orgId, id);
+        String lastSnippet = messages.isEmpty() ? "" : messages.get(messages.size() - 1).getContent();
+        return ResponseEntity.ok(ApiResponse.ok("Conversation status updated", toConversationResponse(resolved, lastSnippet)));
     }
 
     private ContactResponse toContactResponse(Contact c) {
@@ -175,12 +227,16 @@ public class CrmController {
     }
 
     private ConversationResponse toConversationResponse(Conversation c, String lastSnippet) {
+        MessagingWindowResponse window = messagingWindowService.evaluateWindow(c);
         return ConversationResponse.builder()
                 .id(c.getId())
                 .contact(toContactResponse(c.getContact()))
                 .channel(c.getChannel())
                 .isResolved(c.isResolved())
                 .lastMessageAt(c.getLastMessageAt())
+                .lastCustomerMessageAt(c.getLastCustomerMessageAt())
+                .windowStatus(window.getWindowStatus())
+                .windowRemainingSeconds(window.getRemainingSeconds())
                 .lastMessageSnippet(lastSnippet)
                 .unreadCount(0)
                 .build();

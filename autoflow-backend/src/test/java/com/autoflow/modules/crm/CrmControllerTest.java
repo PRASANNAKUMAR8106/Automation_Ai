@@ -53,11 +53,26 @@ class CrmControllerTest {
     @MockBean
     private CrmService crmService;
 
+    @MockBean
+    private com.autoflow.modules.crm.service.MessagingWindowService messagingWindowService;
+
+    @MockBean
+    private com.autoflow.modules.crm.service.LiveChatStreamService liveChatStreamService;
+
     private final UUID testOrgId = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
         TenantContext.setTenantId(testOrgId);
+        when(messagingWindowService.evaluateWindow(any())).thenReturn(
+                MessagingWindowResponse.builder()
+                        .windowStatus("ACTIVE_24H")
+                        .remainingSeconds(80000L)
+                        .canSendFreeform(true)
+                        .canSendHumanAgent(true)
+                        .policyDescription("Active")
+                        .build()
+        );
     }
 
     @AfterEach
@@ -205,7 +220,7 @@ class CrmControllerTest {
                 .build();
         sent.setId(UUID.randomUUID());
 
-        when(crmService.sendAgentReply(testOrgId, convoId, req.getContent(), null)).thenReturn(sent);
+        when(crmService.sendAgentReply(testOrgId, convoId, req.getContent(), null, false)).thenReturn(sent);
 
         mockMvc.perform(post("/api/v1/crm/conversations/" + convoId + "/messages")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -281,5 +296,99 @@ class CrmControllerTest {
                 .andExpect(content().string(containsString("Contact ID,Channel,External ID,Username,Full Name,Email,Phone,Lead Status,Tags,Created At,Last Interaction")));
 
         verify(crmService).getContacts(testOrgId, "vip", "lead");
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/crm/conversations/{id}/window-status returns compliance data")
+    void testGetWindowStatus() throws Exception {
+        UUID conversationId = UUID.randomUUID();
+        MessagingWindowResponse window = MessagingWindowResponse.builder()
+                .conversationId(conversationId)
+                .channel(ChannelType.INSTAGRAM)
+                .windowStatus("ACTIVE_24H")
+                .remainingSeconds(72000L)
+                .canSendFreeform(true)
+                .canSendHumanAgent(true)
+                .policyDescription("Active 24h window")
+                .build();
+
+        when(messagingWindowService.getWindowStatus(eq(testOrgId), eq(conversationId))).thenReturn(window);
+
+        mockMvc.perform(get("/api/v1/crm/conversations/{id}/window-status", conversationId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.windowStatus").value("ACTIVE_24H"))
+                .andExpect(jsonPath("$.data.canSendFreeform").value(true))
+                .andExpect(jsonPath("$.data.remainingSeconds").value(72000));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/crm/conversations/{id}/typing broadcasts typing state")
+    void testBroadcastTyping() throws Exception {
+        UUID conversationId = UUID.randomUUID();
+        TypingIndicatorRequest req = TypingIndicatorRequest.builder().isTyping(true).build();
+
+        mockMvc.perform(post("/api/v1/crm/conversations/{id}/typing", conversationId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        verify(liveChatStreamService).broadcastTyping(testOrgId, conversationId, true);
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/crm/conversations/{id}/resolve toggles conversation status")
+    void testResolveConversation() throws Exception {
+        UUID conversationId = UUID.randomUUID();
+        ResolveConversationRequest req = ResolveConversationRequest.builder().resolved(true).build();
+
+        Conversation conversation = Conversation.builder()
+                .organizationId(testOrgId)
+                .contact(Contact.builder().channel(ChannelType.INSTAGRAM).externalId("ext1").username("u1").build())
+                .channel(ChannelType.INSTAGRAM)
+                .resolved(true)
+                .build();
+        conversation.setId(conversationId);
+
+        when(crmService.resolveConversation(eq(testOrgId), eq(conversationId), eq(true))).thenReturn(conversation);
+        when(crmService.getMessages(eq(testOrgId), eq(conversationId))).thenReturn(List.of());
+
+        mockMvc.perform(post("/api/v1/crm/conversations/{id}/resolve", conversationId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.isResolved").value(true));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/crm/conversations/{id}/messages propagates humanAgentTag")
+    void testSendAgentReply_WithHumanAgentTag() throws Exception {
+        UUID conversationId = UUID.randomUUID();
+        SendAgentReplyRequest req = SendAgentReplyRequest.builder()
+                .content("Escalated human reply")
+                .humanAgentTag(true)
+                .build();
+
+        Message msg = Message.builder()
+                .organizationId(testOrgId)
+                .direction("OUTBOUND")
+                .senderType("AGENT")
+                .content("Escalated human reply")
+                .sentAt(Instant.now())
+                .build();
+        msg.setId(UUID.randomUUID());
+
+        when(crmService.sendAgentReply(eq(testOrgId), eq(conversationId), eq("Escalated human reply"), any(), eq(true)))
+                .thenReturn(msg);
+
+        mockMvc.perform(post("/api/v1/crm/conversations/{id}/messages", conversationId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        verify(crmService).sendAgentReply(testOrgId, conversationId, "Escalated human reply", null, true);
     }
 }

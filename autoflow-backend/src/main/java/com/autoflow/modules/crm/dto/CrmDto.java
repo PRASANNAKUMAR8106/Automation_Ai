@@ -2,6 +2,7 @@ package com.autoflow.modules.crm.dto;
 
 import com.autoflow.modules.crm.entity.ChannelType;
 import com.autoflow.modules.crm.entity.LeadStatus;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import lombok.AllArgsConstructor;
@@ -42,8 +43,19 @@ public class CrmDto {
         private UUID id;
         private ContactResponse contact;
         private ChannelType channel;
+
+        @JsonProperty("isResolved")
         private boolean isResolved;
+
+        @JsonProperty("resolved")
+        public boolean getResolved() {
+            return isResolved;
+        }
+
         private Instant lastMessageAt;
+        private Instant lastCustomerMessageAt;
+        private String windowStatus;
+        private Long windowRemainingSeconds;
         private String lastMessageSnippet;
         private int unreadCount;
     }
@@ -81,5 +93,48 @@ public class CrmDto {
         @NotBlank(message = "Message content must not be blank")
         private String content;
         private String mediaUrl;
+        private boolean humanAgentTag;
+
+        public SendAgentReplyRequest(String content, String mediaUrl) {
+            this.content = content;
+            this.mediaUrl = mediaUrl;
+            this.humanAgentTag = false;
+        }
+
+        public SendAgentReplyRequest(String content) {
+            this(content, null, false);
+        }
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MessagingWindowResponse {
+        private UUID conversationId;
+        private ChannelType channel;
+        private String windowStatus; // ACTIVE_24H, HUMAN_AGENT_EXTENDED_7D, EXPIRED, UNRESTRICTED
+        private Long remainingSeconds;
+        private Instant lastCustomerMessageAt;
+        private Instant windowExpiresAt;
+        private boolean canSendFreeform;
+        private boolean canSendHumanAgent;
+        private String policyDescription;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TypingIndicatorRequest {
+        private boolean isTyping;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ResolveConversationRequest {
+        private boolean resolved;
     }
 }

@@ -76,6 +76,60 @@ class ContactModel {
   ];
 }
 
+class MessagingWindowStatusModel {
+  final String conversationId;
+  final String channel;
+  final String windowStatus; // ACTIVE_24H, HUMAN_AGENT_EXTENDED_7D, EXPIRED, UNRESTRICTED
+  final int remainingSeconds;
+  final DateTime? lastCustomerMessageAt;
+  final DateTime? windowExpiresAt;
+  final bool canSendFreeform;
+  final bool canSendHumanAgent;
+  final String policyDescription;
+
+  const MessagingWindowStatusModel({
+    required this.conversationId,
+    required this.channel,
+    required this.windowStatus,
+    required this.remainingSeconds,
+    this.lastCustomerMessageAt,
+    this.windowExpiresAt,
+    required this.canSendFreeform,
+    required this.canSendHumanAgent,
+    required this.policyDescription,
+  });
+
+  factory MessagingWindowStatusModel.fromJson(Map<String, dynamic> json) {
+    return MessagingWindowStatusModel(
+      conversationId: json['conversationId']?.toString() ?? '',
+      channel: json['channel']?.toString() ?? 'INSTAGRAM',
+      windowStatus: json['windowStatus']?.toString() ?? 'ACTIVE_24H',
+      remainingSeconds: (json['remainingSeconds'] as num?)?.toInt() ?? 86400,
+      lastCustomerMessageAt: json['lastCustomerMessageAt'] != null
+          ? DateTime.tryParse(json['lastCustomerMessageAt'].toString())
+          : null,
+      windowExpiresAt: json['windowExpiresAt'] != null
+          ? DateTime.tryParse(json['windowExpiresAt'].toString())
+          : null,
+      canSendFreeform: json['canSendFreeform'] as bool? ?? true,
+      canSendHumanAgent: json['canSendHumanAgent'] as bool? ?? true,
+      policyDescription: json['policyDescription']?.toString() ?? '',
+    );
+  }
+
+  String get formattedRemainingTime {
+    if (windowStatus == 'UNRESTRICTED') return 'Unrestricted';
+    if (windowStatus == 'EXPIRED' || remainingSeconds <= 0) return 'Window Closed';
+    final hours = remainingSeconds ~/ 3600;
+    final minutes = (remainingSeconds % 3600) ~/ 60;
+    if (hours > 0) {
+      return '${hours}h ${minutes}m left';
+    } else {
+      return '${minutes}m left';
+    }
+  }
+}
+
 class ConversationModel {
   final String id;
   final String name;
@@ -84,6 +138,9 @@ class ConversationModel {
   final String lastMessage;
   final String time;
   final bool unread;
+  final bool isResolved;
+  final String windowStatus;
+  final int windowRemainingSeconds;
   final List<Map<String, dynamic>> messages;
 
   const ConversationModel({
@@ -94,6 +151,9 @@ class ConversationModel {
     required this.lastMessage,
     required this.time,
     required this.unread,
+    this.isResolved = false,
+    this.windowStatus = 'ACTIVE_24H',
+    this.windowRemainingSeconds = 86400,
     required this.messages,
   });
 
@@ -106,6 +166,9 @@ class ConversationModel {
       lastMessage: 'Just downloaded the PDF, thank you so much!',
       time: '3m ago',
       unread: true,
+      isResolved: false,
+      windowStatus: 'ACTIVE_24H',
+      windowRemainingSeconds: 79200,
       messages: [
         {'sender': 'contact', 'text': 'GUIDE', 'time': '10:14 AM'},
         {'sender': 'bot', 'text': 'Hey Sneha! Here is the PDF you requested 🎁', 'time': '10:14 AM'},
@@ -120,6 +183,9 @@ class ConversationModel {
       lastMessage: 'Can I book a 1-on-1 coaching call?',
       time: '25m ago',
       unread: false,
+      isResolved: false,
+      windowStatus: 'ACTIVE_24H',
+      windowRemainingSeconds: 43200,
       messages: [
         {'sender': 'contact', 'text': 'DEMO', 'time': '09:45 AM'},
         {'sender': 'bot', 'text': 'Welcome to AutoFlow! How can we help your business today?', 'time': '09:45 AM'},
@@ -139,6 +205,10 @@ final crmContactsProvider = FutureProvider<List<ContactModel>>((ref) async {
 
 final crmConversationsProvider = FutureProvider<List<ConversationModel>>((ref) async {
   return ref.watch(crmRepositoryProvider).getConversations();
+});
+
+final crmWindowStatusProvider = FutureProvider.family<MessagingWindowStatusModel, String>((ref, conversationId) async {
+  return ref.watch(crmRepositoryProvider).getWindowStatus(conversationId);
 });
 
 class CrmRepository {
@@ -218,6 +288,9 @@ class CrmRepository {
               lastMessage: json['lastMessageSnippet']?.toString() ?? '',
               time: 'Recent',
               unread: (json['unreadCount'] as num?)?.toInt() != 0,
+              isResolved: json['resolved'] == true || json['isResolved'] == true,
+              windowStatus: json['windowStatus']?.toString() ?? 'ACTIVE_24H',
+              windowRemainingSeconds: (json['windowRemainingSeconds'] as num?)?.toInt() ?? 86400,
               messages: [],
             );
           }).toList();
@@ -227,11 +300,75 @@ class CrmRepository {
     return ConversationModel.defaultConversations;
   }
 
-  Future<void> sendReply(String conversationId, String content) async {
+  Future<MessagingWindowStatusModel> getWindowStatus(String conversationId) async {
+    try {
+      final response = await _apiClient.dio.get(ApiConstants.crmConversationWindowStatus(conversationId));
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        return MessagingWindowStatusModel.fromJson(response.data['data'] as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return MessagingWindowStatusModel(
+      conversationId: conversationId,
+      channel: 'INSTAGRAM',
+      windowStatus: 'ACTIVE_24H',
+      remainingSeconds: 86400,
+      canSendFreeform: true,
+      canSendHumanAgent: true,
+      policyDescription: 'Customer message is within standard 24-hour care window.',
+    );
+  }
+
+  Future<bool> resolveConversation(String conversationId, bool resolved) async {
+    try {
+      final response = await _apiClient.dio.post(
+        ApiConstants.crmConversationResolve(conversationId),
+        data: {'resolved': resolved},
+      );
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        final data = response.data['data'] as Map<String, dynamic>? ?? {};
+        return data['resolved'] == true || data['isResolved'] == true;
+      }
+    } catch (_) {}
+    return resolved;
+  }
+
+  Future<void> sendTyping(String conversationId, bool isTyping) async {
+    try {
+      await _apiClient.dio.post(
+        ApiConstants.crmConversationTyping(conversationId),
+        data: {'isTyping': isTyping},
+      );
+    } catch (_) {}
+  }
+
+  Future<List<Map<String, dynamic>>> getMessages(String conversationId) async {
+    try {
+      final response = await _apiClient.dio.get(ApiConstants.crmConversationMessages(conversationId));
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        final list = response.data['data'] as List<dynamic>? ?? [];
+        return list.map((m) {
+          final json = m as Map<String, dynamic>;
+          final isAgent = json['senderType'] == 'AGENT' || json['direction'] == 'OUTBOUND';
+          return {
+            'id': json['id']?.toString(),
+            'sender': isAgent ? 'agent' : 'contact',
+            'text': json['content']?.toString() ?? '',
+            'time': json['sentAt'] != null ? 'Recent' : 'Now',
+          };
+        }).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  Future<void> sendReply(String conversationId, String content, {bool humanAgentTag = false}) async {
     try {
       await _apiClient.dio.post(
         ApiConstants.crmConversationMessages(conversationId),
-        data: {'content': content},
+        data: {
+          'content': content,
+          'humanAgentTag': humanAgentTag,
+        },
       );
     } catch (_) {}
   }

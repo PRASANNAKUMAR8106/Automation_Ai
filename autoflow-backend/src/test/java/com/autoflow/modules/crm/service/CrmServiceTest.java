@@ -54,6 +54,12 @@ class CrmServiceTest {
     @Mock
     private com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider telegramChannelProvider;
 
+    @Mock
+    private MessagingWindowService messagingWindowService;
+
+    @Mock
+    private LiveChatStreamService liveChatStreamService;
+
     private CrmServiceImpl crmService;
     private final UUID testOrgId = UUID.randomUUID();
 
@@ -67,7 +73,9 @@ class CrmServiceTest {
                 tokenEncryptionService,
                 instagramChannelProvider,
                 whatsAppChannelProvider,
-                telegramChannelProvider
+                telegramChannelProvider,
+                messagingWindowService,
+                liveChatStreamService
         );
     }
 
@@ -274,5 +282,93 @@ class CrmServiceTest {
         assertEquals("OUTBOUND", sent.getDirection());
         assertEquals("tg_msg_888", sent.getExternalMessageId());
         verify(telegramChannelProvider).sendMessage("bot_token_abc", "123456789", "Hello on Telegram!");
+    }
+
+    @Test
+    @DisplayName("recordMessage updates lastCustomerMessageAt for inbound customer message and broadcasts SSE event")
+    void shouldUpdateCustomerMessageTimestampAndBroadcastSse() {
+        UUID convoId = UUID.randomUUID();
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.INSTAGRAM)
+                .build();
+        convo.setId(convoId);
+
+        when(messageRepository.save(any(Message.class))).thenAnswer(i -> {
+            Message m = i.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+        when(conversationRepository.save(any(Conversation.class))).thenAnswer(i -> i.getArgument(0));
+
+        Message recorded = crmService.recordMessage(
+                testOrgId,
+                convo,
+                "INBOUND",
+                "CONTACT",
+                "TEXT",
+                "I want to buy the course",
+                null,
+                "msg_ext_123"
+        );
+
+        assertNotNull(recorded);
+        assertNotNull(convo.getLastCustomerMessageAt());
+        verify(liveChatStreamService).broadcastMessage(eq(testOrgId), eq(convoId), any());
+    }
+
+    @Test
+    @DisplayName("sendAgentReply validates messaging window with humanAgentTag")
+    void shouldValidateMessagingWindowOnAgentReply() {
+        UUID convoId = UUID.randomUUID();
+        Contact contact = Contact.builder()
+                .channel(ChannelType.INSTAGRAM)
+                .externalId("ig_customer_456")
+                .build();
+        contact.setId(UUID.randomUUID());
+        contact.setOrganizationId(testOrgId);
+
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.INSTAGRAM)
+                .contact(contact)
+                .build();
+        convo.setId(convoId);
+
+        when(conversationRepository.findById(convoId)).thenReturn(Optional.of(convo));
+        when(connectedAccountRepository.findByOrganizationIdAndChannel(testOrgId, ChannelType.INSTAGRAM))
+                .thenReturn(Optional.empty());
+        when(instagramChannelProvider.sendPrivateDirectMessage(any(), any(), any())).thenReturn("ig_out_1");
+        when(messageRepository.save(any(Message.class))).thenAnswer(i -> {
+            Message m = i.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+        when(conversationRepository.save(any(Conversation.class))).thenAnswer(i -> i.getArgument(0));
+
+        crmService.sendAgentReply(testOrgId, convoId, "Special reply", null, true);
+
+        verify(messagingWindowService).validateCanSend(convo, true);
+        verify(instagramChannelProvider).sendPrivateDirectMessage("mock_channel_token", "ig_customer_456", "Special reply");
+    }
+
+    @Test
+    @DisplayName("resolveConversation toggles resolved state and broadcasts event")
+    void shouldResolveConversationAndBroadcastEvent() {
+        UUID convoId = UUID.randomUUID();
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.WHATSAPP)
+                .resolved(false)
+                .build();
+        convo.setId(convoId);
+
+        when(conversationRepository.findById(convoId)).thenReturn(Optional.of(convo));
+        when(conversationRepository.save(any(Conversation.class))).thenAnswer(i -> i.getArgument(0));
+
+        Conversation resolved = crmService.resolveConversation(testOrgId, convoId, true);
+
+        assertTrue(resolved.isResolved());
+        verify(liveChatStreamService).broadcastConversationResolved(testOrgId, convoId, true);
     }
 }

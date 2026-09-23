@@ -33,4 +33,8 @@ public interface CrmService {
     List<Message> getMessages(UUID organizationId, UUID conversationId);
 
     Message sendAgentReply(UUID organizationId, UUID conversationId, String content, String mediaUrl);
+
+    Message sendAgentReply(UUID organizationId, UUID conversationId, String content, String mediaUrl, boolean humanAgentTag);
+
+    Conversation resolveConversation(UUID organizationId, UUID conversationId, boolean resolved);
 }

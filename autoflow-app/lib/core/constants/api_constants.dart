@@ -41,6 +41,11 @@ class ApiConstants {
   static String crmContactTag(String id, String tag) => '/api/v1/crm/contacts/$id/tags/$tag';
   static const String crmConversations = '/api/v1/crm/conversations';
   static String crmConversationMessages(String id) => '/api/v1/crm/conversations/$id/messages';
+  static String crmConversationStream(String id) => '/api/v1/crm/conversations/$id/stream';
+  static const String crmInboxStream = '/api/v1/crm/stream/inbox';
+  static String crmConversationWindowStatus(String id) => '/api/v1/crm/conversations/$id/window-status';
+  static String crmConversationTyping(String id) => '/api/v1/crm/conversations/$id/typing';
+  static String crmConversationResolve(String id) => '/api/v1/crm/conversations/$id/resolve';
 
   // Analytics & Funnels
   static const String analyticsOverview = '/api/v1/analytics/overview';
