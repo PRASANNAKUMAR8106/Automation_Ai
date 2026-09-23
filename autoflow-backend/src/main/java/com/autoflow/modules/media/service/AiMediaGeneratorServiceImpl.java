@@ -15,6 +15,12 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Implementation of {@link AiMediaGeneratorService} utilizing pure in-memory Java 2D graphics
+ * (BufferedImage, Graphics2D) for template-based visual asset synthesis (coupons, lead magnets, promo banners).
+ * Eliminates native binary dependencies (e.g. ImageMagick, Python) while providing dynamic token interpolation
+ * and direct S3 upload with MIME validation.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor

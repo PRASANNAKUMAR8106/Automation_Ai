@@ -155,7 +155,7 @@ class _AiMediaGeneratorDialogState extends ConsumerState<AiMediaGeneratorDialog>
                             children: [
                               Text('AI Branded Media Studio', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: AppTheme.textLight)),
                               SizedBox(height: 2),
-                              Text('Synthesize high-resolution promotional graphics & coupons', style: TextStyle(color: AppTheme.textMuted, fontSize: 13), overflow: TextOverflow.ellipsis),
+                              Text('Synthesize branded promotional graphics & coupons via Java 2D templates', style: TextStyle(color: AppTheme.textMuted, fontSize: 13), overflow: TextOverflow.ellipsis),
                             ],
                           ),
                         ),

@@ -1,5 +1,6 @@
 package com.autoflow.modules.media.service;
 
+import com.autoflow.common.exceptions.ResourceNotFoundException;
 import com.autoflow.modules.media.entity.MediaAsset;
 import com.autoflow.modules.media.repository.MediaAssetRepository;
 import lombok.RequiredArgsConstructor;
@@ -97,6 +98,6 @@ public class MediaStorageServiceImpl implements MediaStorageService {
     @Transactional(readOnly = true)
     public MediaAsset getMediaAsset(UUID orgId, UUID assetId) {
         return mediaAssetRepository.findByIdAndOrganizationId(assetId, orgId)
-                .orElseThrow(() -> new IllegalArgumentException("Media asset not found: " + assetId));
+                .orElseThrow(() -> new ResourceNotFoundException("MediaAsset", assetId));
     }
 }

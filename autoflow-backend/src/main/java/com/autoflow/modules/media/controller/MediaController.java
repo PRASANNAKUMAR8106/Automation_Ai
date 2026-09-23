@@ -1,6 +1,7 @@
 package com.autoflow.modules.media.controller;
 
 import com.autoflow.common.ApiResponse;
+import com.autoflow.modules.media.entity.MediaAsset;
 import com.autoflow.modules.media.service.MediaStorageService;
 import com.autoflow.security.TenantContext;
 import io.swagger.v3.oas.annotations.Operation;
@@ -48,14 +49,35 @@ public class MediaController {
         return ResponseEntity.ok(ApiResponse.ok("File uploaded and verified successfully", response));
     }
 
+    @GetMapping("/{id}")
+    @Operation(summary = "Get Media Asset Metadata", description = "Retrieves tenant-isolated media asset metadata and short-lived pre-signed download URL")
+    public ResponseEntity<ApiResponse<MediaStorageService.MediaUploadResponse>> getMediaMetadata(
+            @PathVariable UUID id
+    ) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        MediaAsset asset = mediaStorageService.getMediaAsset(orgId, id);
+        String downloadUrl = mediaStorageService.generatePresignedDownloadUrl(orgId, id, Duration.ofHours(1));
+        MediaStorageService.MediaUploadResponse response = new MediaStorageService.MediaUploadResponse(
+                asset.getId(),
+                asset.getOrganizationId(),
+                asset.getFileName(),
+                asset.getMimeType(),
+                asset.getFileSizeBytes(),
+                asset.getSha256Checksum(),
+                downloadUrl
+        );
+        return ResponseEntity.ok(ApiResponse.ok("Media asset metadata retrieved", response));
+    }
+
     @GetMapping("/{id}/download-url")
-    @Operation(summary = "Get Pre-Signed Download URL", description = "Generates secure pre-signed S3 download URL with 1-hour TTL")
+    @Operation(summary = "Get Pre-Signed Download URL", description = "Generates secure pre-signed S3 download URL with bounded TTL (1-1440 mins)")
     public ResponseEntity<ApiResponse<Map<String, String>>> getDownloadUrl(
             @PathVariable UUID id,
             @RequestParam(defaultValue = "60") int ttlMinutes
     ) {
         UUID orgId = TenantContext.getRequiredTenantId();
-        String url = mediaStorageService.generatePresignedDownloadUrl(orgId, id, Duration.ofMinutes(ttlMinutes));
+        int safeTtl = Math.min(Math.max(ttlMinutes, 1), 1440);
+        String url = mediaStorageService.generatePresignedDownloadUrl(orgId, id, Duration.ofMinutes(safeTtl));
         return ResponseEntity.ok(ApiResponse.ok("Download URL generated", Map.of("downloadUrl", url)));
     }
 }

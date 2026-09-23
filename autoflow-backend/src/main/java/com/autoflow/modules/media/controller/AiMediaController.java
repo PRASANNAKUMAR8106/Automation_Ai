@@ -22,13 +22,13 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/media/ai")
 @RequiredArgsConstructor
-@Tag(name = "AI Multi-Modal Media Generation", description = "Dynamic visual media asset synthesis and S3 delivery")
+@Tag(name = "AI Multi-Modal Media Generation", description = "Template-based Java 2D dynamic visual asset synthesis and S3 delivery")
 public class AiMediaController {
 
     private final AiMediaGeneratorService aiMediaGeneratorService;
 
     @PostMapping("/generate")
-    @Operation(summary = "Generate AI Branded Visual Asset", description = "Synthesizes custom branded PNG graphics with dynamic tokens and securely stores in S3")
+    @Operation(summary = "Generate Branded Visual Asset", description = "Synthesizes custom branded PNG graphics using template-based Java 2D graphics engine with dynamic token interpolation and securely stores in S3")
     public ResponseEntity<ApiResponse<MediaStorageService.MediaUploadResponse>> generateAiMedia(
             @Valid @RequestBody AiMediaGenerateRequest request
     ) {
