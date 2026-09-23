@@ -5,6 +5,7 @@ import com.autoflow.common.exceptions.ValidationException;
 import com.autoflow.modules.billing.service.EntitlementService;
 import com.autoflow.modules.workflow.dto.*;
 import com.autoflow.modules.workflow.engine.DagModel;
+import com.autoflow.modules.workflow.engine.WorkflowExecutionEngine;
 import com.autoflow.modules.workflow.entity.AutomationExecution;
 import com.autoflow.modules.workflow.entity.ExecutionStatus;
 import com.autoflow.modules.workflow.entity.Workflow;
@@ -12,15 +13,15 @@ import com.autoflow.modules.workflow.entity.WorkflowVersion;
 import com.autoflow.modules.workflow.repository.AutomationExecutionRepository;
 import com.autoflow.modules.workflow.repository.WorkflowRepository;
 import com.autoflow.modules.workflow.repository.WorkflowVersionRepository;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
+import java.time.Instant;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -32,6 +33,7 @@ public class WorkflowServiceImpl implements WorkflowService {
     private final WorkflowVersionRepository workflowVersionRepository;
     private final AutomationExecutionRepository automationExecutionRepository;
     private final EntitlementService entitlementService;
+    private final WorkflowExecutionEngine workflowExecutionEngine;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -192,6 +194,16 @@ public class WorkflowServiceImpl implements WorkflowService {
         AutomationExecution execution = automationExecutionRepository.findByIdAndOrganizationId(executionId, organizationId)
                 .orElseThrow(() -> new ResourceNotFoundException("AutomationExecution", executionId));
 
+        // Idempotency: If already in RETRYING state, safely return without duplicate re-dispatch
+        if (execution.getStatus() == ExecutionStatus.RETRYING) {
+            log.info("Execution {} is already queued for retry; returning current state idempotently", executionId);
+            return WorkflowExecutionResponse.fromEntity(execution);
+        }
+
+        if (execution.getStatus() == ExecutionStatus.SUCCESS) {
+            throw new IllegalStateException("Execution has already succeeded and cannot be retried");
+        }
+
         if (execution.getStatus() != ExecutionStatus.FAILED) {
             throw new IllegalStateException("Only failed workflow executions can be retried (current status: " + execution.getStatus() + ")");
         }
@@ -200,12 +212,46 @@ public class WorkflowServiceImpl implements WorkflowService {
             throw new IllegalStateException("Maximum retry attempts (3) exceeded for execution " + executionId);
         }
 
+        // Preserve previous execution history into retry telemetry
+        Map<String, Object> contextMap = new HashMap<>();
+        try {
+            if (execution.getExecutionContext() != null && !execution.getExecutionContext().isBlank()) {
+                contextMap = objectMapper.readValue(execution.getExecutionContext(), new TypeReference<Map<String, Object>>() {});
+            }
+        } catch (Exception e) {
+            log.warn("Failed to parse execution context when preserving retry telemetry: {}", e.getMessage());
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> retryTelemetry = (List<Map<String, Object>>) contextMap.computeIfAbsent(
+                "retryTelemetry", k -> new ArrayList<>()
+        );
+
+        Map<String, Object> attemptRecord = new HashMap<>();
+        attemptRecord.put("attempt", execution.getRetryCount() + 1);
+        attemptRecord.put("retriedAt", Instant.now().toString());
+        attemptRecord.put("previousStatus", execution.getStatus().name());
+        attemptRecord.put("previousError", execution.getErrorMessage());
+        attemptRecord.put("failedNodeId", execution.getCurrentNodeId());
+        attemptRecord.put("originalStartedAt", execution.getStartedAt() != null ? execution.getStartedAt().toString() : null);
+        attemptRecord.put("originalCompletedAt", execution.getCompletedAt() != null ? execution.getCompletedAt().toString() : null);
+        retryTelemetry.add(attemptRecord);
+
+        try {
+            execution.setExecutionContext(objectMapper.writeValueAsString(contextMap));
+        } catch (Exception e) {
+            log.warn("Failed to serialize updated execution context with retry telemetry: {}", e.getMessage());
+        }
+
         execution.setRetryCount(execution.getRetryCount() + 1);
         execution.setStatus(ExecutionStatus.RETRYING);
         execution.setErrorMessage(null);
         AutomationExecution updated = automationExecutionRepository.save(execution);
 
-        log.info("Queued execution {} for retry (attempt #{}) under org {}", executionId, updated.getRetryCount(), organizationId);
+        // Re-dispatch execution to WorkflowExecutionEngine
+        workflowExecutionEngine.reDispatchExecution(updated.getId());
+
+        log.info("Queued and re-dispatched execution {} for retry (attempt #{}) under org {}", executionId, updated.getRetryCount(), organizationId);
         return WorkflowExecutionResponse.fromEntity(updated);
     }
 

@@ -21,8 +21,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Map;
+import java.util.List;
 import com.autoflow.common.exceptions.ResourceNotFoundException;
+import com.autoflow.modules.workflow.engine.WorkflowExecutionEngine;
 import com.autoflow.modules.workflow.entity.AutomationExecution;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.autoflow.modules.workflow.entity.ExecutionStatus;
 import com.autoflow.modules.workflow.dto.WorkflowExecutionResponse;
 
@@ -47,6 +51,9 @@ class WorkflowServiceTest {
     @Mock
     private EntitlementService entitlementService;
 
+    @Mock
+    private WorkflowExecutionEngine workflowExecutionEngine;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private WorkflowServiceImpl workflowService;
 
@@ -59,6 +66,7 @@ class WorkflowServiceTest {
                 workflowVersionRepository,
                 automationExecutionRepository,
                 entitlementService,
+                workflowExecutionEngine,
                 objectMapper
         );
     }
@@ -148,7 +156,7 @@ class WorkflowServiceTest {
     }
 
     @Test
-    @DisplayName("Should successfully retry failed workflow execution")
+    @DisplayName("Should successfully retry failed workflow execution and re-dispatch to engine")
     void shouldRetryFailedExecutionSuccessfully() {
         UUID executionId = UUID.randomUUID();
         AutomationExecution failedExecution = AutomationExecution.builder()
@@ -156,7 +164,9 @@ class WorkflowServiceTest {
                 .organizationId(testOrgId)
                 .status(ExecutionStatus.FAILED)
                 .retryCount(0)
-                .errorMessage("API timeout")
+                .currentNodeId("node_dm")
+                .errorMessage("Instagram API timeout (504)")
+                .executionContext("{\"username\":\"priya_s\"}")
                 .build();
 
         when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
@@ -170,12 +180,88 @@ class WorkflowServiceTest {
         assertEquals(ExecutionStatus.RETRYING, resp.getStatus());
         assertEquals(1, resp.getRetryCount());
         assertNull(resp.getErrorMessage());
+
+        // Verify saved execution
         verify(automationExecutionRepository).save(failedExecution);
+
+        // Verify re-dispatch to WorkflowExecutionEngine
+        verify(workflowExecutionEngine).reDispatchExecution(executionId);
     }
 
     @Test
-    @DisplayName("Should reject retry when execution status is not FAILED")
-    void shouldRejectRetryWhenStatusNotFailed() {
+    @DisplayName("Should preserve original execution history and failure diagnostics in retryTelemetry")
+    void shouldPreserveOriginalExecutionHistoryInRetryTelemetry() throws Exception {
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution failedExecution = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .status(ExecutionStatus.FAILED)
+                .retryCount(1)
+                .currentNodeId("node_ai_reply")
+                .errorMessage("OpenAI rate limit (429)")
+                .executionContext("{\"username\":\"arun_k\",\"commentText\":\"PRICE\"}")
+                .build();
+
+        when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
+                .thenReturn(Optional.of(failedExecution));
+        when(automationExecutionRepository.save(any(AutomationExecution.class)))
+                .thenAnswer(i -> i.getArgument(0));
+
+        workflowService.retryWorkflowExecution(testOrgId, executionId);
+
+        ArgumentCaptor<AutomationExecution> captor = ArgumentCaptor.forClass(AutomationExecution.class);
+        verify(automationExecutionRepository).save(captor.capture());
+
+        AutomationExecution saved = captor.getValue();
+        assertEquals(2, saved.getRetryCount());
+        assertEquals(ExecutionStatus.RETRYING, saved.getStatus());
+
+        // Inspect preserved retryTelemetry
+        Map<String, Object> contextMap = objectMapper.readValue(saved.getExecutionContext(), new TypeReference<Map<String, Object>>() {});
+        assertEquals("arun_k", contextMap.get("username"));
+        assertEquals("PRICE", contextMap.get("commentText"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> telemetry = (List<Map<String, Object>>) contextMap.get("retryTelemetry");
+        assertNotNull(telemetry);
+        assertEquals(1, telemetry.size());
+
+        Map<String, Object> record = telemetry.get(0);
+        assertEquals(2, record.get("attempt"));
+        assertEquals("FAILED", record.get("previousStatus"));
+        assertEquals("OpenAI rate limit (429)", record.get("previousError"));
+        assertEquals("node_ai_reply", record.get("failedNodeId"));
+        assertNotNull(record.get("retriedAt"));
+    }
+
+    @Test
+    @DisplayName("Should remain idempotent and safe on duplicate retry requests without re-dispatching")
+    void shouldBeIdempotentOnDuplicateRetryRequest() {
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution alreadyRetrying = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .status(ExecutionStatus.RETRYING)
+                .retryCount(1)
+                .build();
+
+        when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
+                .thenReturn(Optional.of(alreadyRetrying));
+
+        WorkflowExecutionResponse resp = workflowService.retryWorkflowExecution(testOrgId, executionId);
+
+        assertNotNull(resp);
+        assertEquals(ExecutionStatus.RETRYING, resp.getStatus());
+        assertEquals(1, resp.getRetryCount());
+
+        // Must NOT save again, must NOT increment count, must NOT re-dispatch engine task
+        verify(automationExecutionRepository, never()).save(any());
+        verify(workflowExecutionEngine, never()).reDispatchExecution(any());
+    }
+
+    @Test
+    @DisplayName("Should reject retry when execution status is SUCCESS")
+    void shouldRejectRetryWhenStatusSuccess() {
         UUID executionId = UUID.randomUUID();
         AutomationExecution successExecution = AutomationExecution.builder()
                 .id(executionId)
@@ -187,9 +273,29 @@ class WorkflowServiceTest {
         when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
                 .thenReturn(Optional.of(successExecution));
 
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                workflowService.retryWorkflowExecution(testOrgId, executionId));
+        assertTrue(ex.getMessage().contains("already succeeded"));
+        verify(workflowExecutionEngine, never()).reDispatchExecution(any());
+    }
+
+    @Test
+    @DisplayName("Should reject retry when execution status is RUNNING")
+    void shouldRejectRetryWhenStatusRunning() {
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution runningExecution = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .status(ExecutionStatus.RUNNING)
+                .retryCount(0)
+                .build();
+
+        when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
+                .thenReturn(Optional.of(runningExecution));
+
         assertThrows(IllegalStateException.class, () ->
                 workflowService.retryWorkflowExecution(testOrgId, executionId));
-        verify(automationExecutionRepository, never()).save(any());
+        verify(workflowExecutionEngine, never()).reDispatchExecution(any());
     }
 
     @Test
@@ -208,7 +314,7 @@ class WorkflowServiceTest {
 
         assertThrows(IllegalStateException.class, () ->
                 workflowService.retryWorkflowExecution(testOrgId, executionId));
-        verify(automationExecutionRepository, never()).save(any());
+        verify(workflowExecutionEngine, never()).reDispatchExecution(any());
     }
 
     @Test
@@ -220,6 +326,7 @@ class WorkflowServiceTest {
 
         assertThrows(ResourceNotFoundException.class, () ->
                 workflowService.retryWorkflowExecution(testOrgId, executionId));
+        verify(workflowExecutionEngine, never()).reDispatchExecution(any());
     }
 }
 

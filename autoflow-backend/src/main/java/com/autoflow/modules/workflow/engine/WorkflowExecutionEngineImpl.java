@@ -18,8 +18,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.autoflow.common.exceptions.ResourceNotFoundException;
+import com.autoflow.modules.crm.entity.ChannelType;
+import com.fasterxml.jackson.core.type.TypeReference;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -266,5 +270,89 @@ public class WorkflowExecutionEngineImpl implements WorkflowExecutionEngine {
             result = result.replace("{{" + entry.getKey() + "}}", String.valueOf(entry.getValue()));
         }
         return result;
+    }
+
+    @Override
+    public CompletableFuture<AutomationExecution> reDispatchExecution(UUID executionId) {
+        return CompletableFuture.supplyAsync(() -> {
+            AutomationExecution execution = automationExecutionRepository.findById(executionId)
+                    .orElseThrow(() -> new ResourceNotFoundException("AutomationExecution", executionId));
+
+            Workflow workflow = execution.getWorkflow();
+            WorkflowVersion version = execution.getWorkflowVersion();
+            if (version == null && workflow != null && workflow.getActiveVersionNumber() != null) {
+                version = workflowVersionRepository.findByWorkflowIdAndVersionNumber(
+                        workflow.getId(), workflow.getActiveVersionNumber()).orElse(null);
+            }
+
+            if (workflow == null || version == null) {
+                execution.setStatus(ExecutionStatus.FAILED);
+                execution.setErrorMessage("Cannot retry: workflow or active version definition is missing");
+                execution.setCompletedAt(Instant.now());
+                return automationExecutionRepository.save(execution);
+            }
+
+            // Transition from RETRYING to RUNNING
+            execution.setStatus(ExecutionStatus.RUNNING);
+            execution = automationExecutionRepository.save(execution);
+
+            // Parse execution context to recover parameters
+            Map<String, Object> runContext = new HashMap<>();
+            try {
+                if (execution.getExecutionContext() != null && !execution.getExecutionContext().isBlank()) {
+                    runContext = objectMapper.readValue(execution.getExecutionContext(), new TypeReference<Map<String, Object>>() {});
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse existing executionContext for retry of {}: {}", executionId, e.getMessage());
+            }
+
+            String username = (String) runContext.getOrDefault("username", "friend");
+            String fullName = (String) runContext.getOrDefault("fullName", "");
+            String commentText = (String) runContext.getOrDefault("commentText", "");
+            String messageText = (String) runContext.getOrDefault("messageText", "");
+            String contactExternalId = (String) runContext.getOrDefault("contactExternalId", execution.getTriggerEventId());
+            String pageAccessToken = (String) runContext.getOrDefault("pageAccessToken", "mock_token");
+
+            InboundEventContext event = InboundEventContext.builder()
+                    .organizationId(execution.getOrganizationId())
+                    .channel(ChannelType.INSTAGRAM)
+                    .eventType("RETRY")
+                    .externalAccountId(workflow.getOrganizationId().toString())
+                    .contactExternalId(contactExternalId)
+                    .username(username)
+                    .fullName(fullName)
+                    .commentId(execution.getTriggerEventId())
+                    .commentText(commentText)
+                    .messageId(execution.getTriggerEventId())
+                    .messageText(messageText)
+                    .pageAccessToken(pageAccessToken)
+                    .build();
+
+            try {
+                DagModel dag = DagModel.fromJson(version.getGraphDefinition(), objectMapper);
+                List<DagModel.DagNode> nodes = dag.getTopologicalOrder();
+
+                for (DagModel.DagNode node : nodes) {
+                    execution.setCurrentNodeId(node.getId());
+                    executeNode(node, event, runContext);
+                }
+
+                execution.setStatus(ExecutionStatus.SUCCESS);
+                execution.setErrorMessage(null);
+                execution.setCompletedAt(Instant.now());
+                execution.setExecutionContext(objectMapper.writeValueAsString(runContext));
+                log.info("Successfully re-dispatched and executed retry for execution {} under org {}", executionId, execution.getOrganizationId());
+            } catch (Exception e) {
+                log.error("Retry execution {} failed at node {}: {}", executionId, execution.getCurrentNodeId(), e.getMessage(), e);
+                execution.setStatus(ExecutionStatus.FAILED);
+                execution.setErrorMessage(e.getMessage());
+                execution.setCompletedAt(Instant.now());
+                try {
+                    execution.setExecutionContext(objectMapper.writeValueAsString(runContext));
+                } catch (Exception ignored) {}
+            }
+
+            return automationExecutionRepository.save(execution);
+        }, virtualExecutor);
     }
 }

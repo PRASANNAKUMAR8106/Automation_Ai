@@ -23,7 +23,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -154,4 +156,119 @@ class WorkflowExecutionEngineTest {
         assertNotNull(result.getCompletedAt());
         assertNull(result.getErrorMessage());
     }
+
+    @Test
+    @DisplayName("Should successfully re-dispatch and execute retry for failed execution")
+    void shouldReDispatchAndExecuteRetrySuccessfully() {
+        UUID workflowId = UUID.randomUUID();
+        Workflow workflow = Workflow.builder().name("Retry Lead Magnet").status("PUBLISHED").activeVersionNumber(1).build();
+        workflow.setId(workflowId);
+        workflow.setOrganizationId(testOrgId);
+
+        String dagJson = """
+                {
+                    "nodes": [
+                        {"id": "n1", "type": "TRIGGER_INSTAGRAM_COMMENT"},
+                        {"id": "n2", "type": "ACTION_SEND_DM", "config": {"message": "Retry delivery for {{username}}"}},
+                        {"id": "n3", "type": "ACTION_TAG_CONTACT", "config": {"tags": ["retried_lead"]}}
+                    ],
+                    "edges": [
+                        {"from": "n1", "to": "n2"},
+                        {"from": "n2", "to": "n3"}
+                    ]
+                }
+                """;
+
+        WorkflowVersion version = WorkflowVersion.builder().workflow(workflow).versionNumber(1).graphDefinition(dagJson).build();
+
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution execution = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .workflow(workflow)
+                .workflowVersion(version)
+                .triggerType("TRIGGER_INSTAGRAM_COMMENT")
+                .triggerEventId("comment_retry_101")
+                .status(ExecutionStatus.RETRYING)
+                .retryCount(1)
+                .executionContext("{\"username\":\"priya_k\",\"contactExternalId\":\"ig_user_888\"}")
+                .build();
+
+        Contact mockContact = Contact.builder().channel(ChannelType.INSTAGRAM).externalId("ig_user_888").build();
+        mockContact.setId(UUID.randomUUID());
+        mockContact.setOrganizationId(testOrgId);
+        Conversation mockConversation = Conversation.builder().organizationId(testOrgId).contact(mockContact).build();
+
+        when(automationExecutionRepository.findById(executionId)).thenReturn(Optional.of(execution));
+        when(automationExecutionRepository.save(any(AutomationExecution.class))).thenAnswer(i -> i.getArgument(0));
+
+        when(crmService.getOrCreateContact(eq(testOrgId), eq(ChannelType.INSTAGRAM), eq("ig_user_888"), any(), any()))
+                .thenReturn(mockContact);
+        when(crmService.getOrCreateConversation(eq(testOrgId), eq(mockContact))).thenReturn(mockConversation);
+        when(instagramChannelProvider.sendPrivateDirectMessage(any(), eq("ig_user_888"), eq("Retry delivery for priya_k")))
+                .thenReturn("dm_retry_ok");
+
+        CompletableFuture<AutomationExecution> future = executionEngine.reDispatchExecution(executionId);
+        AutomationExecution result = future.join();
+
+        assertNotNull(result);
+        assertEquals(ExecutionStatus.SUCCESS, result.getStatus());
+        assertNull(result.getErrorMessage());
+        assertNotNull(result.getCompletedAt());
+
+        // Verify actions executed upon retry
+        verify(instagramChannelProvider).sendPrivateDirectMessage(any(), eq("ig_user_888"), eq("Retry delivery for priya_k"));
+        verify(crmService).addTagsToContact(eq(testOrgId), eq(mockContact.getId()), eq(List.of("retried_lead")));
+    }
+
+    @Test
+    @DisplayName("Should handle failure during retry and set terminal status to FAILED")
+    void shouldHandleFailureDuringRetryAndMarkFailed() {
+        UUID workflowId = UUID.randomUUID();
+        Workflow workflow = Workflow.builder().name("Failing Flow").status("PUBLISHED").activeVersionNumber(1).build();
+        workflow.setId(workflowId);
+        workflow.setOrganizationId(testOrgId);
+
+        String dagJson = """
+                {
+                    "nodes": [
+                        {"id": "n1", "type": "TRIGGER_INSTAGRAM_COMMENT"},
+                        {"id": "n2", "type": "ACTION_SEND_DM", "config": {"message": "Hello"}}
+                    ],
+                    "edges": [
+                        {"from": "n1", "to": "n2"}
+                    ]
+                }
+                """;
+
+        WorkflowVersion version = WorkflowVersion.builder().workflow(workflow).versionNumber(1).graphDefinition(dagJson).build();
+
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution execution = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .workflow(workflow)
+                .workflowVersion(version)
+                .triggerType("TRIGGER_INSTAGRAM_COMMENT")
+                .triggerEventId("comment_fail_202")
+                .status(ExecutionStatus.RETRYING)
+                .retryCount(1)
+                .executionContext("{\"username\":\"alex\",\"contactExternalId\":\"ig_user_999\"}")
+                .build();
+
+        when(automationExecutionRepository.findById(executionId)).thenReturn(Optional.of(execution));
+        when(automationExecutionRepository.save(any(AutomationExecution.class))).thenAnswer(i -> i.getArgument(0));
+
+        when(instagramChannelProvider.sendPrivateDirectMessage(any(), eq("ig_user_999"), anyString()))
+                .thenThrow(new RuntimeException("Meta Graph API error: User blocked messages"));
+
+        CompletableFuture<AutomationExecution> future = executionEngine.reDispatchExecution(executionId);
+        AutomationExecution result = future.join();
+
+        assertNotNull(result);
+        assertEquals(ExecutionStatus.FAILED, result.getStatus());
+        assertEquals("Meta Graph API error: User blocked messages", result.getErrorMessage());
+        assertNotNull(result.getCompletedAt());
+    }
 }
+
