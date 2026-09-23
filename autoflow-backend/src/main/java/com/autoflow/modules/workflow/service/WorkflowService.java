@@ -22,4 +22,6 @@ public interface WorkflowService {
     void deleteWorkflow(UUID organizationId, UUID workflowId);
 
     List<WorkflowExecutionResponse> getWorkflowExecutions(UUID organizationId, UUID workflowId);
+
+    WorkflowExecutionResponse retryWorkflowExecution(UUID organizationId, UUID executionId);
 }

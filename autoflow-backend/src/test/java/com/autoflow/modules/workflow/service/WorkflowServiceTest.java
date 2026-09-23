@@ -21,6 +21,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
 import java.util.UUID;
+import com.autoflow.common.exceptions.ResourceNotFoundException;
+import com.autoflow.modules.workflow.entity.AutomationExecution;
+import com.autoflow.modules.workflow.entity.ExecutionStatus;
+import com.autoflow.modules.workflow.dto.WorkflowExecutionResponse;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -142,4 +146,80 @@ class WorkflowServiceTest {
         assertEquals(3, response.getActiveVersionNumber());
         verify(workflowRepository).save(workflow);
     }
+
+    @Test
+    @DisplayName("Should successfully retry failed workflow execution")
+    void shouldRetryFailedExecutionSuccessfully() {
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution failedExecution = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .status(ExecutionStatus.FAILED)
+                .retryCount(0)
+                .errorMessage("API timeout")
+                .build();
+
+        when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
+                .thenReturn(Optional.of(failedExecution));
+        when(automationExecutionRepository.save(any(AutomationExecution.class)))
+                .thenAnswer(i -> i.getArgument(0));
+
+        WorkflowExecutionResponse resp = workflowService.retryWorkflowExecution(testOrgId, executionId);
+
+        assertNotNull(resp);
+        assertEquals(ExecutionStatus.RETRYING, resp.getStatus());
+        assertEquals(1, resp.getRetryCount());
+        assertNull(resp.getErrorMessage());
+        verify(automationExecutionRepository).save(failedExecution);
+    }
+
+    @Test
+    @DisplayName("Should reject retry when execution status is not FAILED")
+    void shouldRejectRetryWhenStatusNotFailed() {
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution successExecution = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .status(ExecutionStatus.SUCCESS)
+                .retryCount(0)
+                .build();
+
+        when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
+                .thenReturn(Optional.of(successExecution));
+
+        assertThrows(IllegalStateException.class, () ->
+                workflowService.retryWorkflowExecution(testOrgId, executionId));
+        verify(automationExecutionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should reject retry when max retry limit is exceeded")
+    void shouldRejectRetryWhenMaxRetriesExceeded() {
+        UUID executionId = UUID.randomUUID();
+        AutomationExecution maxedExecution = AutomationExecution.builder()
+                .id(executionId)
+                .organizationId(testOrgId)
+                .status(ExecutionStatus.FAILED)
+                .retryCount(3)
+                .build();
+
+        when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
+                .thenReturn(Optional.of(maxedExecution));
+
+        assertThrows(IllegalStateException.class, () ->
+                workflowService.retryWorkflowExecution(testOrgId, executionId));
+        verify(automationExecutionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should reject retry when execution does not belong to tenant")
+    void shouldRejectRetryWhenCrossTenant() {
+        UUID executionId = UUID.randomUUID();
+        when(automationExecutionRepository.findByIdAndOrganizationId(executionId, testOrgId))
+                .thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () ->
+                workflowService.retryWorkflowExecution(testOrgId, executionId));
+    }
 }
+

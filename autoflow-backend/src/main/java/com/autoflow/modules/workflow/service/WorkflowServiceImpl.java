@@ -6,6 +6,7 @@ import com.autoflow.modules.billing.service.EntitlementService;
 import com.autoflow.modules.workflow.dto.*;
 import com.autoflow.modules.workflow.engine.DagModel;
 import com.autoflow.modules.workflow.entity.AutomationExecution;
+import com.autoflow.modules.workflow.entity.ExecutionStatus;
 import com.autoflow.modules.workflow.entity.Workflow;
 import com.autoflow.modules.workflow.entity.WorkflowVersion;
 import com.autoflow.modules.workflow.repository.AutomationExecutionRepository;
@@ -183,6 +184,29 @@ public class WorkflowServiceImpl implements WorkflowService {
         findOrgWorkflow(organizationId, workflowId);
         List<AutomationExecution> executions = automationExecutionRepository.findByWorkflowIdOrderByStartedAtDesc(workflowId);
         return executions.stream().map(WorkflowExecutionResponse::fromEntity).collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional
+    public WorkflowExecutionResponse retryWorkflowExecution(UUID organizationId, UUID executionId) {
+        AutomationExecution execution = automationExecutionRepository.findByIdAndOrganizationId(executionId, organizationId)
+                .orElseThrow(() -> new ResourceNotFoundException("AutomationExecution", executionId));
+
+        if (execution.getStatus() != ExecutionStatus.FAILED) {
+            throw new IllegalStateException("Only failed workflow executions can be retried (current status: " + execution.getStatus() + ")");
+        }
+
+        if (execution.getRetryCount() >= 3) {
+            throw new IllegalStateException("Maximum retry attempts (3) exceeded for execution " + executionId);
+        }
+
+        execution.setRetryCount(execution.getRetryCount() + 1);
+        execution.setStatus(ExecutionStatus.RETRYING);
+        execution.setErrorMessage(null);
+        AutomationExecution updated = automationExecutionRepository.save(execution);
+
+        log.info("Queued execution {} for retry (attempt #{}) under org {}", executionId, updated.getRetryCount(), organizationId);
+        return WorkflowExecutionResponse.fromEntity(updated);
     }
 
     private Workflow findOrgWorkflow(UUID organizationId, UUID workflowId) {

@@ -103,4 +103,14 @@ public class WorkflowController {
         List<WorkflowExecutionResponse> response = workflowService.getWorkflowExecutions(orgId, id);
         return ResponseEntity.ok(ApiResponse.ok("Workflow executions retrieved successfully", response));
     }
+
+    @PostMapping("/executions/{executionId}/retry")
+    @Operation(summary = "Retry Failed Execution", description = "Safely retries a failed workflow execution run under tenant authorization")
+    public ResponseEntity<ApiResponse<WorkflowExecutionResponse>> retryWorkflowExecution(
+            @PathVariable UUID executionId
+    ) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        WorkflowExecutionResponse response = workflowService.retryWorkflowExecution(orgId, executionId);
+        return ResponseEntity.ok(ApiResponse.ok("Workflow execution queued for retry", response));
+    }
 }

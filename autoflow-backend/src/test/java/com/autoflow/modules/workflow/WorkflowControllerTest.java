@@ -157,4 +157,29 @@ class WorkflowControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data[0].status").value("SUCCESS"));
     }
+
+    @Test
+    @DisplayName("POST /api/v1/workflows/executions/{executionId}/retry queues failed execution for retry")
+    void testRetryWorkflowExecution() throws Exception {
+        UUID executionId = UUID.randomUUID();
+        WorkflowExecutionResponse resp = WorkflowExecutionResponse.builder()
+                .id(executionId)
+                .workflowId(testWorkflowId)
+                .status(ExecutionStatus.RETRYING)
+                .retryCount(1)
+                .startedAt(Instant.now())
+                .build();
+
+        when(workflowService.retryWorkflowExecution(testOrgId, executionId)).thenReturn(resp);
+
+        mockMvc.perform(post("/api/v1/workflows/executions/" + executionId + "/retry"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(executionId.toString()))
+                .andExpect(jsonPath("$.data.status").value("RETRYING"))
+                .andExpect(jsonPath("$.data.retryCount").value(1));
+
+        verify(workflowService).retryWorkflowExecution(testOrgId, executionId);
+    }
 }
+

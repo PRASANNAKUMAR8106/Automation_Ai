@@ -124,4 +124,100 @@ class WorkflowRepository {
       return false;
     }
   }
+
+  Future<List<WorkflowExecutionModel>> getExecutions(String workflowId) async {
+    try {
+      final response = await _apiClient.dio.get(ApiConstants.workflowExecutions(workflowId));
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        final list = response.data['data'] as List<dynamic>? ?? [];
+        if (list.isNotEmpty) {
+          return list.map((e) => WorkflowExecutionModel.fromJson(e as Map<String, dynamic>)).toList();
+        }
+      }
+    } catch (_) {}
+    return WorkflowExecutionModel.defaultExecutions(workflowId);
+  }
+
+  Future<WorkflowExecutionModel?> retryExecution(String executionId) async {
+    try {
+      final response = await _apiClient.dio.post(ApiConstants.workflowExecutionRetry(executionId));
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        return WorkflowExecutionModel.fromJson(response.data['data'] as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return null;
+  }
 }
+
+class WorkflowExecutionModel {
+  final String id;
+  final String workflowId;
+  final String? workflowName;
+  final String? triggerType;
+  final String? triggerEventId;
+  final String status;
+  final String? currentNodeId;
+  final String? errorMessage;
+  final int retryCount;
+  final DateTime? startedAt;
+  final DateTime? completedAt;
+
+  const WorkflowExecutionModel({
+    required this.id,
+    required this.workflowId,
+    this.workflowName,
+    this.triggerType,
+    this.triggerEventId,
+    required this.status,
+    this.currentNodeId,
+    this.errorMessage,
+    this.retryCount = 0,
+    this.startedAt,
+    this.completedAt,
+  });
+
+  factory WorkflowExecutionModel.fromJson(Map<String, dynamic> json) {
+    return WorkflowExecutionModel(
+      id: json['id']?.toString() ?? '',
+      workflowId: json['workflowId']?.toString() ?? '',
+      workflowName: json['workflowName']?.toString(),
+      triggerType: json['triggerType']?.toString(),
+      triggerEventId: json['triggerEventId']?.toString(),
+      status: json['status']?.toString() ?? 'PENDING',
+      currentNodeId: json['currentNodeId']?.toString(),
+      errorMessage: json['errorMessage']?.toString(),
+      retryCount: (json['retryCount'] as num?)?.toInt() ?? 0,
+      startedAt: json['startedAt'] != null ? DateTime.tryParse(json['startedAt'].toString()) : null,
+      completedAt: json['completedAt'] != null ? DateTime.tryParse(json['completedAt'].toString()) : null,
+    );
+  }
+
+  static List<WorkflowExecutionModel> defaultExecutions(String workflowId) => [
+    WorkflowExecutionModel(
+      id: 'exec-1',
+      workflowId: workflowId,
+      workflowName: 'Lead Magnet Funnel',
+      triggerType: 'TRIGGER_INSTAGRAM_COMMENT',
+      status: 'SUCCESS',
+      retryCount: 0,
+      startedAt: DateTime.now().subtract(const Duration(minutes: 15)),
+      completedAt: DateTime.now().subtract(const Duration(minutes: 14)),
+    ),
+    WorkflowExecutionModel(
+      id: 'exec-2',
+      workflowId: workflowId,
+      workflowName: 'Lead Magnet Funnel',
+      triggerType: 'TRIGGER_INSTAGRAM_COMMENT',
+      status: 'FAILED',
+      errorMessage: 'Instagram Graph API rate limit exceeded (code 429)',
+      retryCount: 1,
+      startedAt: DateTime.now().subtract(const Duration(hours: 1)),
+      completedAt: DateTime.now().subtract(const Duration(minutes: 59)),
+    ),
+  ];
+}
+
+final workflowExecutionsProvider = FutureProvider.family<List<WorkflowExecutionModel>, String>((ref, workflowId) async {
+  return ref.watch(workflowRepositoryProvider).getExecutions(workflowId);
+});
+

@@ -26,6 +26,12 @@ class ApiConstants {
   static String workflowVersions(String id) => '/api/v1/workflows/$id/versions';
   static String publishWorkflow(String id) => '/api/v1/workflows/$id/publish';
   static String workflowExecutions(String id) => '/api/v1/workflows/$id/executions';
+  static String workflowExecutionRetry(String executionId) => '/api/v1/workflows/executions/$executionId/retry';
+
+  // Templates
+  static const String templates = '/api/v1/templates';
+  static String template(String id) => '/api/v1/templates/$id';
+  static String templateInstantiate(String id) => '/api/v1/templates/$id/instantiate';
 
   // CRM & Live Chat Inbox
   static const String crmContacts = '/api/v1/crm/contacts';

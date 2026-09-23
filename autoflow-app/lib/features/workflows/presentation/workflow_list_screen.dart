@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/workflow_repository.dart';
+import 'template_gallery_dialog.dart';
+import 'workflow_execution_history_dialog.dart';
 
 class WorkflowListScreen extends ConsumerStatefulWidget {
   const WorkflowListScreen({super.key});
@@ -103,20 +105,39 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Automations & Workflows', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 4),
-                    const Text('Manage, test, and monitor your social-media automations.', style: TextStyle(color: AppTheme.textMuted, fontSize: 14)),
-                  ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Automations & Workflows', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Manage, test, and monitor your social-media automations.',
+                        style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
                 ),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    context.push('/workflows/builder');
-                  },
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('New Automation'),
+                const SizedBox(width: 16),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => TemplateGalleryDialog.show(context),
+                      icon: const Icon(Icons.hub_outlined, size: 18),
+                      label: const Text('Starter Templates'),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        context.push('/workflows/builder');
+                      },
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('New Automation'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -253,13 +274,31 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
                           ),
 
                           // Stats
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text('${wf['executions']} runs', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                              const SizedBox(height: 4),
-                              Text('${wf['conversionRate']} conv.', style: const TextStyle(color: AppTheme.success, fontSize: 12)),
-                            ],
+                          InkWell(
+                            onTap: () => WorkflowExecutionHistoryDialog.show(
+                              context,
+                              wf['id'] as String,
+                              wf['name'] as String,
+                            ),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text('${wf['executions']} runs', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                      const SizedBox(width: 4),
+                                      const Icon(Icons.history, size: 14, color: AppTheme.textMuted),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text('${wf['conversionRate']} conv.', style: const TextStyle(color: AppTheme.success, fontSize: 12)),
+                                ],
+                              ),
+                            ),
                           ),
                           const SizedBox(width: 24),
 
@@ -280,10 +319,17 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
                             onSelected: (action) {
                               if (action == 'edit') {
                                 context.push('/workflows/${wf['id']}/builder');
+                              } else if (action == 'history') {
+                                WorkflowExecutionHistoryDialog.show(
+                                  context,
+                                  wf['id'] as String,
+                                  wf['name'] as String,
+                                );
                               }
                             },
                             itemBuilder: (context) => [
                               const PopupMenuItem(value: 'edit', child: Text('Open Canvas')),
+                              const PopupMenuItem(value: 'history', child: Text('Execution History')),
                               const PopupMenuItem(value: 'test', child: Text('Test Run')),
                               const PopupMenuItem(value: 'duplicate', child: Text('Duplicate')),
                               const PopupMenuDivider(),
