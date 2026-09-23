@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:autoflow_app/core/theme/app_theme.dart';
+import '../../workflows/presentation/workflow_funnel_dialog.dart';
 import '../domain/workflow_edge_model.dart';
 import '../domain/workflow_graph_model.dart';
 import '../domain/workflow_node_model.dart';
+import 'widgets/ai_media_generator_dialog.dart';
 import 'widgets/node_config_drawer.dart';
 import 'widgets/workflow_edge_painter.dart';
 import 'widgets/workflow_node_widget.dart';
@@ -110,10 +112,48 @@ class _WorkflowBuilderScreenState extends State<WorkflowBuilderScreen> {
                   _addNode(NodeType.actionGoogleSheetsSync, 'Google Sheets Sync', NodeCategory.action, {});
                 },
               ),
+              ListTile(
+                leading: const Icon(Icons.perm_media_outlined, color: Color(0xFF6366F1)),
+                title: const Text('Send Media / Lead Magnet Asset'),
+                subtitle: const Text('Send images, guides, or AI generated promo coupons directly via DM'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _addNode(NodeType.actionSendMediaAsset, 'Send Media Asset', NodeCategory.action, {
+                    'media_url': '{{lastGeneratedMediaUrl}}',
+                    'asset_type': 'IMAGE',
+                  });
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.auto_awesome, color: Color(0xFFF43F5E)),
+                title: const Text('AI Media Studio Generator'),
+                subtitle: const Text('Synthesize custom dynamic vouchers or lead magnet graphics'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final generatedUrl = await showDialog<String>(
+                    context: context,
+                    builder: (context) => const AiMediaGeneratorDialog(),
+                  );
+                  _addNode(NodeType.actionSendMediaAsset, 'Deliver AI Asset', NodeCategory.action, {
+                    'media_url': generatedUrl ?? '{{lastGeneratedMediaUrl}}',
+                    'asset_type': 'IMAGE',
+                  });
+                },
+              ),
             ],
           ),
         );
       },
+    );
+  }
+
+  void _showFunnelDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => WorkflowFunnelDialog(
+        workflowId: _graph.id,
+        workflowName: _graph.name,
+      ),
     );
   }
 
@@ -310,6 +350,14 @@ class _WorkflowBuilderScreenState extends State<WorkflowBuilderScreen> {
                                 tooltip: 'Reset Zoom',
                               ),
                               const SizedBox(height: 24, child: VerticalDivider(color: AppTheme.borderDark)),
+                              const SizedBox(width: 8),
+
+                              // Funnel Stats Button
+                              IconButton(
+                                onPressed: _showFunnelDialog,
+                                icon: const Icon(Icons.insights_rounded, size: 20),
+                                tooltip: 'Funnel Stats',
+                              ),
                               const SizedBox(width: 8),
 
                               // Add Node Button

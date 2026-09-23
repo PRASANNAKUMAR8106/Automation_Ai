@@ -42,8 +42,18 @@ class ApiConstants {
   static const String crmConversations = '/api/v1/crm/conversations';
   static String crmConversationMessages(String id) => '/api/v1/crm/conversations/$id/messages';
 
-  // Analytics
+  // Analytics & Funnels
   static const String analyticsOverview = '/api/v1/analytics/overview';
+  static String analyticsWorkflowFunnel(String workflowId) => '/api/v1/analytics/funnels/$workflowId';
+  static const String analyticsFunnelsOverview = '/api/v1/analytics/funnels/overview';
+
+  // AI Media Generation
+  static const String mediaAiGenerate = '/api/v1/media/ai/generate';
+
+  // Webhook DLQ
+  static const String webhooksDlq = '/api/v1/webhooks/dlq';
+  static String webhookDlqReplay(String id) => '/api/v1/webhooks/dlq/$id/replay';
+  static String webhookDlqDiscard(String id) => '/api/v1/webhooks/dlq/$id/discard';
 
   // Influencer / Affiliate Portal
   static const String influencerPortalStats = '/api/v1/influencer/portal/stats';

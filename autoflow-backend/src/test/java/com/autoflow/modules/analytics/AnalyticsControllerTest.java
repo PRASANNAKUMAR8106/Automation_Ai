@@ -79,4 +79,72 @@ class AnalyticsControllerTest {
                 .andExpect(jsonPath("$.data.maxWorkflows").value(20))
                 .andExpect(jsonPath("$.data.channelBreakdown.INSTAGRAM").value(250));
     }
+
+    @Test
+    @DisplayName("GET /api/v1/analytics/funnels/{id} returns workflow conversion funnel")
+    void testGetWorkflowFunnel() throws Exception {
+        UUID wfId = UUID.randomUUID();
+        com.autoflow.modules.analytics.dto.FunnelAnalyticsDto.WorkflowFunnelResponse funnel =
+                com.autoflow.modules.analytics.dto.FunnelAnalyticsDto.WorkflowFunnelResponse.builder()
+                        .workflowId(wfId)
+                        .workflowName("Comment Lead Magnet")
+                        .status("PUBLISHED")
+                        .totalRuns(100)
+                        .successfulRuns(85)
+                        .failedRuns(15)
+                        .overallConversionRate(85.0)
+                        .bottleneckNodeId("node_dm")
+                        .bottleneckDropOffRate(12.0)
+                        .steps(java.util.List.of(
+                                com.autoflow.modules.analytics.dto.FunnelAnalyticsDto.FunnelStepMetric.builder()
+                                        .nodeId("node_trig")
+                                        .nodeLabel("Instagram Comment Trigger")
+                                        .nodeType("TRIGGER_INSTAGRAM_COMMENT")
+                                        .stepIndex(1)
+                                        .reachedCount(100)
+                                        .dropOffCount(3)
+                                        .conversionPercentage(100.0)
+                                        .stepConversionPercentage(100.0)
+                                        .dropOffPercentage(3.0)
+                                        .avgDurationMs(120)
+                                        .build()
+                        ))
+                        .build();
+
+        when(analyticsService.getWorkflowFunnel(testOrgId, wfId)).thenReturn(funnel);
+
+        mockMvc.perform(get("/api/v1/analytics/funnels/" + wfId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.workflowId").value(wfId.toString()))
+                .andExpect(jsonPath("$.data.totalRuns").value(100))
+                .andExpect(jsonPath("$.data.successfulRuns").value(85))
+                .andExpect(jsonPath("$.data.overallConversionRate").value(85.0))
+                .andExpect(jsonPath("$.data.steps[0].nodeId").value("node_trig"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/analytics/funnels/overview returns aggregated pipelines")
+    void testGetFunnelsOverview() throws Exception {
+        com.autoflow.modules.analytics.dto.FunnelAnalyticsDto.FunnelsOverviewResponse overview =
+                com.autoflow.modules.analytics.dto.FunnelAnalyticsDto.FunnelsOverviewResponse.builder()
+                        .totalPipelines(3)
+                        .aggregateRuns(450)
+                        .aggregateConversions(380)
+                        .averageConversionRate(84.4)
+                        .topConvertingWorkflowId(UUID.randomUUID())
+                        .topConvertingWorkflowName("Comment Lead Magnet")
+                        .funnels(java.util.List.of())
+                        .build();
+
+        when(analyticsService.getFunnelsOverview(testOrgId)).thenReturn(overview);
+
+        mockMvc.perform(get("/api/v1/analytics/funnels/overview"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.totalPipelines").value(3))
+                .andExpect(jsonPath("$.data.aggregateRuns").value(450))
+                .andExpect(jsonPath("$.data.aggregateConversions").value(380))
+                .andExpect(jsonPath("$.data.averageConversionRate").value(84.4));
+    }
 }

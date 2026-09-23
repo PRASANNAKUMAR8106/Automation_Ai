@@ -30,12 +30,14 @@ import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.autoflow.modules.webhook.service.WebhookReplayHandler;
+
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/webhooks/whatsapp")
 @RequiredArgsConstructor
 @Tag(name = "WhatsApp Webhooks", description = "Meta WhatsApp Cloud API webhook verification and message ingestion endpoint")
-public class WhatsAppWebhookController {
+public class WhatsAppWebhookController implements WebhookReplayHandler {
 
     private final ConnectedAccountRepository connectedAccountRepository;
     private final WebhookEventRepository webhookEventRepository;
@@ -49,6 +51,16 @@ public class WhatsAppWebhookController {
 
     @Value("${autoflow.channels.whatsapp.verify-token:autoflow_webhook_verify_token_2026}")
     private String whatsAppVerifyToken;
+
+    @Override
+    public boolean supports(String provider) {
+        return "WHATSAPP".equalsIgnoreCase(provider);
+    }
+
+    @Override
+    public void replay(String payload) {
+        processInboundPayload(payload);
+    }
 
     @GetMapping
     @Operation(summary = "WhatsApp Webhook Verification Challenge", description = "Validates the webhook endpoint with Meta Cloud API")
@@ -76,17 +88,27 @@ public class WhatsAppWebhookController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid signature");
         }
 
+        try {
+            processInboundPayload(rawPayload);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body("Malformed JSON");
+        }
+
+        return ResponseEntity.ok("EVENT_RECEIVED");
+    }
+
+    public void processInboundPayload(String rawPayload) {
         JsonNode root;
         try {
             root = objectMapper.readTree(rawPayload);
         } catch (Exception e) {
             log.error("Failed to parse WhatsApp webhook payload JSON", e);
-            return ResponseEntity.badRequest().body("Malformed JSON");
+            throw new IllegalArgumentException("Malformed JSON", e);
         }
 
         JsonNode entryArray = root.path("entry");
         if (!entryArray.isArray()) {
-            return ResponseEntity.ok("EVENT_RECEIVED");
+            return;
         }
 
         for (JsonNode entry : entryArray) {
@@ -114,8 +136,6 @@ public class WhatsAppWebhookController {
                 }
             }
         }
-
-        return ResponseEntity.ok("EVENT_RECEIVED");
     }
 
     private void processIncomingMessage(String phoneNumberId, JsonNode msgNode, String senderProfileName) {

@@ -13,6 +13,7 @@ import com.autoflow.modules.workflow.engine.InboundEventContext;
 import com.autoflow.modules.workflow.engine.WorkflowExecutionEngine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.autoflow.modules.webhook.service.WebhookReplayHandler;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -35,7 +36,7 @@ import java.util.UUID;
 @RequestMapping("/api/v1/webhooks/instagram")
 @RequiredArgsConstructor
 @Tag(name = "Instagram Webhooks", description = "Meta webhook verification and real-time ingestion endpoint for comments and messages")
-public class InstagramWebhookController {
+public class InstagramWebhookController implements WebhookReplayHandler {
 
     private final ConnectedAccountRepository connectedAccountRepository;
     private final WebhookEventRepository webhookEventRepository;
@@ -49,6 +50,16 @@ public class InstagramWebhookController {
 
     @Value("${autoflow.channels.meta.verify-token:autoflow_webhook_verify_token_2026}")
     private String metaVerifyToken;
+
+    @Override
+    public boolean supports(String provider) {
+        return "INSTAGRAM".equalsIgnoreCase(provider);
+    }
+
+    @Override
+    public void replay(String payload) {
+        processInboundPayload(payload);
+    }
 
     @GetMapping
     @Operation(summary = "Meta Webhook Verification Challenge", description = "Validates the webhook endpoint with Meta Graph API")
@@ -76,17 +87,27 @@ public class InstagramWebhookController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid signature");
         }
 
+        try {
+            processInboundPayload(rawPayload);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body("Malformed JSON");
+        }
+
+        return ResponseEntity.ok("EVENT_RECEIVED");
+    }
+
+    public void processInboundPayload(String rawPayload) {
         JsonNode root;
         try {
             root = objectMapper.readTree(rawPayload);
         } catch (Exception e) {
             log.error("Failed to parse Meta webhook payload JSON", e);
-            return ResponseEntity.badRequest().body("Malformed JSON");
+            throw new IllegalArgumentException("Malformed JSON", e);
         }
 
         JsonNode entryArray = root.path("entry");
         if (!entryArray.isArray()) {
-            return ResponseEntity.ok("EVENT_RECEIVED");
+            return;
         }
 
         for (JsonNode entry : entryArray) {
@@ -124,8 +145,6 @@ public class InstagramWebhookController {
                 }
             }
         }
-
-        return ResponseEntity.ok("EVENT_RECEIVED");
     }
 
     private void processCommentChange(JsonNode valueNode, ConnectedAccount account, String pageAccessToken, String rawPayload) {

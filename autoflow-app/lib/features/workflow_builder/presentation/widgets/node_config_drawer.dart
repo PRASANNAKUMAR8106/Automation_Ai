@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../domain/workflow_node_model.dart';
 import '../../../../core/theme/app_theme.dart';
+import 'ai_media_generator_dialog.dart';
 
 class NodeConfigDrawer extends StatefulWidget {
   final WorkflowNodeModel node;
@@ -38,6 +39,9 @@ class _NodeConfigDrawerState extends State<NodeConfigDrawer> {
     } else if (widget.node.type == NodeType.actionSendDm) {
       _primaryTextController = TextEditingController(text: widget.node.config['message'] ?? '');
       _secondaryTextController = TextEditingController(text: widget.node.config['buttonUrl'] ?? '');
+    } else if (widget.node.type == NodeType.actionSendMediaAsset) {
+      _primaryTextController = TextEditingController(text: widget.node.config['media_url'] ?? widget.node.config['mediaUrl'] ?? '');
+      _secondaryTextController = TextEditingController(text: widget.node.config['asset_type'] ?? widget.node.config['assetType'] ?? 'IMAGE');
     } else {
       _primaryTextController = TextEditingController();
       _secondaryTextController = TextEditingController();
@@ -63,6 +67,11 @@ class _NodeConfigDrawerState extends State<NodeConfigDrawer> {
       if (_secondaryTextController.text.trim().isNotEmpty) {
         widget.node.config['buttonUrl'] = _secondaryTextController.text.trim();
       }
+    } else if (widget.node.type == NodeType.actionSendMediaAsset) {
+      widget.node.config['media_url'] = _primaryTextController.text.trim();
+      widget.node.config['asset_type'] = _secondaryTextController.text.trim().isNotEmpty
+          ? _secondaryTextController.text.trim().toUpperCase()
+          : 'IMAGE';
     }
     widget.onConfigChanged();
     widget.onClose();
@@ -123,6 +132,30 @@ class _NodeConfigDrawerState extends State<NodeConfigDrawer> {
             const Text('Download / External Button URL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
             const SizedBox(height: 8),
             TextField(controller: _secondaryTextController, decoration: const InputDecoration(hintText: 'https://example.com/guide.pdf')),
+          ] else if (widget.node.type == NodeType.actionSendMediaAsset) ...[
+            const Text('Media / Asset URL', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            const SizedBox(height: 4),
+            const Text('Supports direct S3 URLs or dynamic tokens like {{lastGeneratedMediaUrl}}.', style: TextStyle(color: AppTheme.textMuted, fontSize: 11)),
+            const SizedBox(height: 8),
+            TextField(controller: _primaryTextController, decoration: const InputDecoration(hintText: 'https://... or {{lastGeneratedMediaUrl}}')),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final generatedUrl = await showDialog<String>(
+                  context: context,
+                  builder: (context) => const AiMediaGeneratorDialog(),
+                );
+                if (generatedUrl != null && generatedUrl.isNotEmpty) {
+                  setState(() => _primaryTextController.text = generatedUrl);
+                }
+              },
+              icon: const Icon(Icons.auto_awesome, size: 16),
+              label: const Text('Open AI Media Studio'),
+            ),
+            const SizedBox(height: 16),
+            const Text('Asset Type (IMAGE, DOCUMENT, VIDEO)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            const SizedBox(height: 8),
+            TextField(controller: _secondaryTextController, decoration: const InputDecoration(hintText: 'IMAGE')),
           ],
 
           const Spacer(),

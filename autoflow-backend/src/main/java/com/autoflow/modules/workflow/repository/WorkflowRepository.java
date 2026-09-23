@@ -10,6 +10,7 @@ import java.util.UUID;
 @Repository
 public interface WorkflowRepository extends JpaRepository<Workflow, UUID> {
     List<Workflow> findByOrganizationId(UUID organizationId);
+    java.util.Optional<Workflow> findByIdAndOrganizationId(UUID id, UUID organizationId);
     long countByOrganizationId(UUID organizationId);
     long countByOrganizationIdAndStatus(UUID organizationId, String status);
 }

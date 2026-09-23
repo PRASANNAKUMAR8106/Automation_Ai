@@ -61,6 +61,7 @@ void main() {
     // Tap 'Publish Automation'
     final publishBtn = find.text('Publish Automation');
     expect(publishBtn, findsOneWidget);
+    await tester.ensureVisible(publishBtn);
     await tester.tap(publishBtn);
     await tester.pumpAndSettle();
 

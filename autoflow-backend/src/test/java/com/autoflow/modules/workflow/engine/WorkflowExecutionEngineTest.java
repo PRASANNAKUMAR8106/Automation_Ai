@@ -6,6 +6,7 @@ import com.autoflow.modules.crm.entity.ChannelType;
 import com.autoflow.modules.crm.entity.Contact;
 import com.autoflow.modules.crm.entity.Conversation;
 import com.autoflow.modules.crm.service.CrmService;
+import com.autoflow.modules.media.service.AiMediaGeneratorService;
 import com.autoflow.modules.workflow.entity.AutomationExecution;
 import com.autoflow.modules.workflow.entity.ExecutionStatus;
 import com.autoflow.modules.workflow.entity.Workflow;
@@ -54,6 +55,9 @@ class WorkflowExecutionEngineTest {
     private AiRouterService aiRouterService;
 
     @Mock
+    private AiMediaGeneratorService aiMediaGeneratorService;
+
+    @Mock
     private CrmService crmService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -70,6 +74,7 @@ class WorkflowExecutionEngineTest {
                 triggerEvaluator,
                 instagramChannelProvider,
                 aiRouterService,
+                aiMediaGeneratorService,
                 crmService,
                 objectMapper
         );
@@ -269,6 +274,98 @@ class WorkflowExecutionEngineTest {
         assertEquals(ExecutionStatus.FAILED, result.getStatus());
         assertEquals("Meta Graph API error: User blocked messages", result.getErrorMessage());
         assertNotNull(result.getCompletedAt());
+    }
+
+    @Test
+    @DisplayName("Should dynamically generate AI media asset and dispatch media DM with generated URL")
+    void shouldExecuteAiMediaGenerationAndDynamicSendMedia() {
+        Workflow workflow = Workflow.builder()
+                .name("Dynamic AI Media Workflow")
+                .status("PUBLISHED")
+                .activeVersionNumber(1)
+                .build();
+        workflow.setId(UUID.randomUUID());
+        workflow.setOrganizationId(testOrgId);
+
+        String graphJson = """
+        {
+          "nodes": [
+            {
+              "id": "node_trig",
+              "type": "TRIGGER_INSTAGRAM_COMMENT",
+              "config": { "keywords": ["REWARD"] }
+            },
+            {
+              "id": "node_ai_gen",
+              "type": "ACTION_GENERATE_AI_MEDIA",
+              "config": {
+                "template_type": "COUPON_CARD",
+                "prompt": "VIP Reward for {{username}}",
+                "headline": "Exclusive for {{username}}",
+                "badge_text": "VIP-SAVE-20"
+              }
+            },
+            {
+              "id": "node_send_media",
+              "type": "ACTION_SEND_MEDIA",
+              "config": {
+                "asset_type": "IMAGE",
+                "media_url": "{{lastGeneratedMediaUrl}}"
+              }
+            }
+          ],
+          "edges": [
+            { "id": "e1", "from": "node_trig", "to": "node_ai_gen" },
+            { "id": "e2", "from": "node_ai_gen", "to": "node_send_media" }
+          ]
+        }
+        """;
+
+        WorkflowVersion version = WorkflowVersion.builder()
+                .id(UUID.randomUUID())
+                .workflow(workflow)
+                .versionNumber(1)
+                .graphDefinition(graphJson)
+                .build();
+
+        InboundEventContext event = InboundEventContext.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.INSTAGRAM)
+                .contactExternalId("ig_contact_456")
+                .username("sarah_design")
+                .pageAccessToken("eaab_token_123")
+                .commentId("comment_777")
+                .commentText("Send me the REWARD!")
+                .build();
+
+        when(automationExecutionRepository.save(any(AutomationExecution.class))).thenAnswer(i -> i.getArgument(0));
+
+        com.autoflow.modules.media.service.MediaStorageService.MediaUploadResponse mockUpload =
+                new com.autoflow.modules.media.service.MediaStorageService.MediaUploadResponse(
+                        UUID.randomUUID(),
+                        testOrgId,
+                        "ai_asset_123.png",
+                        "image/png",
+                        12345L,
+                        "sha256_mock_hash",
+                        "https://s3.autoflow.ai/tenants/media/ai_asset_123.png"
+                );
+
+        when(aiMediaGeneratorService.generateBrandedAsset(eq(testOrgId), any())).thenReturn(mockUpload);
+        when(instagramChannelProvider.sendMediaMessage(eq("eaab_token_123"), eq("ig_contact_456"), eq("IMAGE"), eq("https://s3.autoflow.ai/tenants/media/ai_asset_123.png")))
+                .thenReturn("msg_media_outbound_999");
+
+        AutomationExecution execution = executionEngine.executeWorkflow(workflow, version, event);
+
+        assertNotNull(execution);
+        assertEquals(ExecutionStatus.SUCCESS, execution.getStatus());
+        verify(aiMediaGeneratorService, times(1)).generateBrandedAsset(eq(testOrgId), any());
+        verify(instagramChannelProvider, times(1)).sendMediaMessage(
+                eq("eaab_token_123"),
+                eq("ig_contact_456"),
+                eq("IMAGE"),
+                eq("https://s3.autoflow.ai/tenants/media/ai_asset_123.png")
+        );
     }
 }
 

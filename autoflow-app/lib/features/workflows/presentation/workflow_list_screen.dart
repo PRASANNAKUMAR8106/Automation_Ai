@@ -5,6 +5,7 @@ import '../../../core/theme/app_theme.dart';
 import '../data/workflow_repository.dart';
 import 'template_gallery_dialog.dart';
 import 'workflow_execution_history_dialog.dart';
+import 'workflow_funnel_dialog.dart';
 
 class WorkflowListScreen extends ConsumerStatefulWidget {
   const WorkflowListScreen({super.key});
@@ -319,6 +320,12 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
                             onSelected: (action) {
                               if (action == 'edit') {
                                 context.push('/workflows/${wf['id']}/builder');
+                              } else if (action == 'funnel') {
+                                WorkflowFunnelDialog.show(
+                                  context,
+                                  wf['id'] as String,
+                                  wf['name'] as String,
+                                );
                               } else if (action == 'history') {
                                 WorkflowExecutionHistoryDialog.show(
                                   context,
@@ -329,6 +336,7 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
                             },
                             itemBuilder: (context) => [
                               const PopupMenuItem(value: 'edit', child: Text('Open Canvas')),
+                              const PopupMenuItem(value: 'funnel', child: Text('Conversion Funnel')),
                               const PopupMenuItem(value: 'history', child: Text('Execution History')),
                               const PopupMenuItem(value: 'test', child: Text('Test Run')),
                               const PopupMenuItem(value: 'duplicate', child: Text('Duplicate')),

@@ -5,6 +5,9 @@ import com.autoflow.modules.channel.provider.instagram.InstagramChannelProvider;
 import com.autoflow.modules.crm.entity.Contact;
 import com.autoflow.modules.crm.entity.Conversation;
 import com.autoflow.modules.crm.service.CrmService;
+import com.autoflow.modules.media.dto.AiMediaGenerateRequest;
+import com.autoflow.modules.media.service.AiMediaGeneratorService;
+import com.autoflow.modules.media.service.MediaStorageService;
 import com.autoflow.modules.workflow.entity.AutomationExecution;
 import com.autoflow.modules.workflow.entity.ExecutionStatus;
 import com.autoflow.modules.workflow.entity.Workflow;
@@ -38,6 +41,7 @@ public class WorkflowExecutionEngineImpl implements WorkflowExecutionEngine {
     private final WorkflowTriggerEvaluator triggerEvaluator;
     private final InstagramChannelProvider instagramChannelProvider;
     private final AiRouterService aiRouterService;
+    private final AiMediaGeneratorService aiMediaGeneratorService;
     private final CrmService crmService;
     private final ObjectMapper objectMapper;
 
@@ -199,9 +203,48 @@ public class WorkflowExecutionEngineImpl implements WorkflowExecutionEngine {
                 }
             }
 
+            case "ACTION_GENERATE_AI_MEDIA" -> {
+                String templateType = (String) config.getOrDefault("template_type", "COUPON_CARD");
+                String prompt = (String) config.getOrDefault("prompt", "Exclusive VIP Asset");
+                String headline = (String) config.getOrDefault("headline", prompt);
+                String subtext = (String) config.getOrDefault("subtext", "Automated custom reward");
+                String badgeText = (String) config.getOrDefault("badge_text", "VIP PERK");
+                String accentColor = (String) config.getOrDefault("accent_color", "#6366F1");
+
+                headline = replacePlaceholders(headline, runContext);
+                subtext = replacePlaceholders(subtext, runContext);
+                badgeText = replacePlaceholders(badgeText, runContext);
+
+                AiMediaGenerateRequest req = AiMediaGenerateRequest.builder()
+                        .templateType(templateType)
+                        .prompt(prompt)
+                        .headline(headline)
+                        .subtext(subtext)
+                        .badgeText(badgeText)
+                        .accentColor(accentColor)
+                        .build();
+
+                try {
+                    MediaStorageService.MediaUploadResponse upload = aiMediaGeneratorService.generateBrandedAsset(
+                            event.getOrganizationId(), req);
+                    runContext.put("lastGeneratedMediaUrl", upload.downloadUrl());
+                    runContext.put("lastGeneratedAssetId", upload.id().toString());
+                    log.info("Generated AI visual asset {} for org {}", upload.id(), event.getOrganizationId());
+                } catch (Exception e) {
+                    log.warn("Failed to generate AI visual asset in node {}: {}", node.getId(), e.getMessage());
+                }
+            }
+
             case "ACTION_SEND_MEDIA" -> {
                 String mediaType = (String) config.getOrDefault("asset_type", "IMAGE");
-                String mediaUrl = (String) config.getOrDefault("media_url", "https://autoflow.ai/sample.png");
+                String rawMediaUrl = (String) config.getOrDefault("media_url", "");
+                String mediaUrl = replacePlaceholders(rawMediaUrl, runContext);
+                if ((mediaUrl == null || mediaUrl.isBlank()) && runContext.containsKey("lastGeneratedMediaUrl")) {
+                    mediaUrl = String.valueOf(runContext.get("lastGeneratedMediaUrl"));
+                }
+                if (mediaUrl == null || mediaUrl.isBlank()) {
+                    mediaUrl = "https://autoflow.ai/sample.png";
+                }
 
                 if (event.getContactExternalId() != null) {
                     String msgId = instagramChannelProvider.sendMediaMessage(

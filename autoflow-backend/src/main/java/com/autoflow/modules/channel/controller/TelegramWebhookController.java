@@ -25,12 +25,14 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.autoflow.modules.webhook.service.WebhookReplayHandler;
+
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/webhooks/telegram")
 @RequiredArgsConstructor
 @Tag(name = "Telegram Webhooks", description = "Telegram Bot API webhook verification and inbound message ingestion endpoint")
-public class TelegramWebhookController {
+public class TelegramWebhookController implements WebhookReplayHandler {
 
     private final ConnectedAccountRepository connectedAccountRepository;
     private final WebhookEventRepository webhookEventRepository;
@@ -41,6 +43,16 @@ public class TelegramWebhookController {
 
     @Value("${autoflow.channels.telegram.webhook-secret:autoflow_telegram_secret_2026}")
     private String configuredSecretToken;
+
+    @Override
+    public boolean supports(String provider) {
+        return "TELEGRAM".equalsIgnoreCase(provider);
+    }
+
+    @Override
+    public void replay(String payload) {
+        processInboundPayload(null, payload);
+    }
 
     @PostMapping({"", "/{botId}"})
     @Operation(summary = "Telegram Inbound Event Delivery", description = "Receives real-time updates from Telegram Bot API")
@@ -55,12 +67,20 @@ public class TelegramWebhookController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Invalid secret token");
         }
 
+        try {
+            return processInboundPayload(pathBotId, rawPayload);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body("Malformed JSON");
+        }
+    }
+
+    public ResponseEntity<String> processInboundPayload(String pathBotId, String rawPayload) {
         JsonNode root;
         try {
             root = objectMapper.readTree(rawPayload);
         } catch (Exception e) {
             log.error("Failed to parse Telegram webhook JSON payload", e);
-            return ResponseEntity.badRequest().body("Malformed JSON");
+            throw new IllegalArgumentException("Malformed JSON", e);
         }
 
         long updateId = root.path("update_id").asLong(-1L);
