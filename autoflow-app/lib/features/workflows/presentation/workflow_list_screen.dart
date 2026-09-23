@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../data/workflow_repository.dart';
 
-class WorkflowListScreen extends StatefulWidget {
+class WorkflowListScreen extends ConsumerStatefulWidget {
   const WorkflowListScreen({super.key});
 
   @override
-  State<WorkflowListScreen> createState() => _WorkflowListScreenState();
+  ConsumerState<WorkflowListScreen> createState() => _WorkflowListScreenState();
 }
 
-class _WorkflowListScreenState extends State<WorkflowListScreen> with SingleTickerProviderStateMixin {
+class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final TextEditingController _searchController = TextEditingController();
 
@@ -182,9 +184,12 @@ class _WorkflowListScreenState extends State<WorkflowListScreen> with SingleTick
                               children: [
                                 Row(
                                   children: [
-                                    Text(
-                                      wf['name'] as String,
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                    Flexible(
+                                      child: Text(
+                                        wf['name'] as String,
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                                     ),
                                     const SizedBox(width: 10),
                                     Container(
@@ -209,11 +214,23 @@ class _WorkflowListScreenState extends State<WorkflowListScreen> with SingleTick
                                   children: [
                                     const Icon(Icons.bolt, size: 14, color: AppTheme.warning),
                                     const SizedBox(width: 4),
-                                    Text(wf['trigger'] as String, style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
-                                    const SizedBox(width: 16),
+                                    Flexible(
+                                      child: Text(
+                                        wf['trigger'] as String,
+                                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
                                     const Icon(Icons.arrow_forward, size: 12, color: AppTheme.textMuted),
                                     const SizedBox(width: 8),
-                                    Text(wf['actions'] as String, style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                                    Flexible(
+                                      child: Text(
+                                        wf['actions'] as String,
+                                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ],

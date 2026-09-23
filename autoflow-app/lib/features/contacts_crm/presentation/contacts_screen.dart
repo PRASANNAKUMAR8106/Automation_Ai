@@ -1,55 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import '../data/crm_repository.dart';
 
-class ContactsScreen extends StatefulWidget {
+class ContactsScreen extends ConsumerWidget {
   const ContactsScreen({super.key});
 
   @override
-  State<ContactsScreen> createState() => _ContactsScreenState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final contactsAsync = ref.watch(crmContactsProvider);
+    final contacts = contactsAsync.value ?? ContactModel.defaultContacts;
 
-class _ContactsScreenState extends State<ContactsScreen> {
-  final List<Map<String, dynamic>> _contacts = [
-    {
-      'name': 'Sneha Kapoor',
-      'username': '@snehak_designs',
-      'channel': 'INSTAGRAM',
-      'email': 'sneha@studio.design',
-      'status': 'QUALIFIED',
-      'tags': ['design-guide', 'warm-lead'],
-      'lastActive': '3 mins ago',
-    },
-    {
-      'name': 'Vikram Rathore',
-      'username': '+91 98765 43210',
-      'channel': 'WHATSAPP',
-      'email': 'vikram@enterprise.in',
-      'status': 'LEAD',
-      'tags': ['demo-request', 'ecommerce'],
-      'lastActive': '25 mins ago',
-    },
-    {
-      'name': 'Ananya Roy',
-      'username': '@ananya_fitness',
-      'channel': 'INSTAGRAM',
-      'email': 'ananya@fitnesshub.com',
-      'status': 'CUSTOMER',
-      'tags': ['coupon-claimed', 'paying-member'],
-      'lastActive': '1 hour ago',
-    },
-    {
-      'name': 'Devendra Mehta',
-      'username': '@devendra_tech',
-      'channel': 'INSTAGRAM',
-      'email': 'devendra@techhub.io',
-      'status': 'NEW',
-      'tags': ['reel-commenter'],
-      'lastActive': '3 hours ago',
-    },
-  ];
-
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Padding(
@@ -96,13 +57,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           DataColumn(label: Text('Tags', style: TextStyle(fontWeight: FontWeight.bold))),
                           DataColumn(label: Text('Last Active', style: TextStyle(fontWeight: FontWeight.bold))),
                         ],
-                        rows: _contacts.map((c) {
+                        rows: contacts.map((c) {
                           Color statusColor;
-                          switch (c['status']) {
+                          switch (c.leadStatus) {
                             case 'CUSTOMER':
                               statusColor = AppTheme.success;
                               break;
                             case 'QUALIFIED':
+                            case 'HOT_LEAD':
                               statusColor = AppTheme.primaryLight;
                               break;
                             case 'LEAD':
@@ -111,6 +73,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
                             default:
                               statusColor = AppTheme.textMuted;
                           }
+
+                          final displayName = c.fullName ?? c.username ?? 'Contact';
+                          final displayInitial = displayName.isNotEmpty ? displayName[0] : 'C';
 
                           return DataRow(
                             cells: [
@@ -121,7 +86,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                       radius: 14,
                                       backgroundColor: AppTheme.primaryDark,
                                       child: Text(
-                                        (c['name'] as String)[0],
+                                        displayInitial,
                                         style: const TextStyle(fontSize: 12, color: Colors.white),
                                       ),
                                     ),
@@ -130,18 +95,18 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
-                                        Text(c['name'] as String, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                                        Text(c['username'] as String, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11)),
+                                        Text(displayName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                        Text(c.username ?? c.externalId, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11)),
                                       ],
                                     ),
                                   ],
                                 ),
                               ),
                               DataCell(
-                                Text(c['channel'] as String, style: const TextStyle(fontSize: 12)),
+                                Text(c.channel, style: const TextStyle(fontSize: 12)),
                               ),
                               DataCell(
-                                Text(c['email'] as String, style: const TextStyle(fontSize: 13)),
+                                Text(c.email ?? '—', style: const TextStyle(fontSize: 13)),
                               ),
                               DataCell(
                                 Container(
@@ -151,7 +116,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Text(
-                                    c['status'] as String,
+                                    c.leadStatus,
                                     style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 11),
                                   ),
                                 ),
@@ -159,7 +124,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                               DataCell(
                                 Wrap(
                                   spacing: 4,
-                                  children: (c['tags'] as List<String>).map((t) {
+                                  children: c.tags.map((t) {
                                     return Chip(
                                       label: Text(t, style: const TextStyle(fontSize: 10)),
                                       padding: EdgeInsets.zero,
@@ -170,7 +135,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                 ),
                               ),
                               DataCell(
-                                Text(c['lastActive'] as String, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                                Text(c.lastInteraction, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
                               ),
                             ],
                           );

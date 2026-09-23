@@ -20,6 +20,36 @@ class ApiConstants {
   // System
   static const String health = '/api/v1/health';
 
+  // Workflows
+  static const String workflows = '/api/v1/workflows';
+  static String workflow(String id) => '/api/v1/workflows/$id';
+  static String workflowVersions(String id) => '/api/v1/workflows/$id/versions';
+  static String publishWorkflow(String id) => '/api/v1/workflows/$id/publish';
+  static String workflowExecutions(String id) => '/api/v1/workflows/$id/executions';
+
+  // CRM & Live Chat Inbox
+  static const String crmContacts = '/api/v1/crm/contacts';
+  static String crmContact(String id) => '/api/v1/crm/contacts/$id';
+  static String crmContactTags(String id) => '/api/v1/crm/contacts/$id/tags';
+  static String crmContactTag(String id, String tag) => '/api/v1/crm/contacts/$id/tags/$tag';
+  static const String crmConversations = '/api/v1/crm/conversations';
+  static String crmConversationMessages(String id) => '/api/v1/crm/conversations/$id/messages';
+
+  // Analytics
+  static const String analyticsOverview = '/api/v1/analytics/overview';
+
+  // Influencer / Affiliate Portal
+  static const String influencerPortalStats = '/api/v1/influencer/portal/stats';
+
+  // Billing
+  static const String billingSubscription = '/api/v1/billing/subscription';
+  static const String billingPlans = '/api/v1/billing/plans';
+  static const String billingCreateOrder = '/api/v1/billing/create-order';
+
+  // Channels
+  static const String channelAccounts = '/api/v1/channels/accounts';
+  static String channelOAuth(String channel) => '/api/v1/channels/oauth/initiate/$channel';
+
   // Timeouts
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 15);

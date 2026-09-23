@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import '../data/influencer_repository.dart';
 
-class InfluencerDashboardScreen extends StatefulWidget {
+class InfluencerDashboardScreen extends ConsumerStatefulWidget {
   const InfluencerDashboardScreen({super.key});
 
   @override
-  State<InfluencerDashboardScreen> createState() => _InfluencerDashboardScreenState();
+  ConsumerState<InfluencerDashboardScreen> createState() => _InfluencerDashboardScreenState();
 }
 
-class _InfluencerDashboardScreenState extends State<InfluencerDashboardScreen> {
+class _InfluencerDashboardScreenState extends ConsumerState<InfluencerDashboardScreen> {
   final String _promoCode = 'RAHUL30';
   final String _referralUrl = 'https://autoflow.ai/r/RAHUL30';
 
@@ -57,6 +59,11 @@ class _InfluencerDashboardScreenState extends State<InfluencerDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final statsAsync = ref.watch(influencerStatsProvider);
+    final stats = statsAsync.value ?? InfluencerStatsModel.defaultFallback;
+    final promoCode = stats.promoCode.isNotEmpty ? stats.promoCode : _promoCode;
+    final referralUrl = stats.referralLink.isNotEmpty ? stats.referralLink : _referralUrl;
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SingleChildScrollView(
@@ -68,14 +75,17 @@ class _InfluencerDashboardScreenState extends State<InfluencerDashboardScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Influencer & Referral Portal', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 4),
-                    const Text('Track your referral traffic, earned commissions, and request payouts.', style: TextStyle(color: AppTheme.textMuted, fontSize: 14)),
-                  ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Influencer & Referral Portal', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 4),
+                      const Text('Track your referral traffic, earned commissions, and request payouts.', style: TextStyle(color: AppTheme.textMuted, fontSize: 14)),
+                    ],
+                  ),
                 ),
+                const SizedBox(width: 16),
                 ElevatedButton.icon(
                   onPressed: _requestPayout,
                   icon: const Icon(Icons.account_balance_wallet_outlined, size: 18),
@@ -109,17 +119,18 @@ class _InfluencerDashboardScreenState extends State<InfluencerDashboardScreen> {
                               children: [
                                 const Icon(Icons.discount_outlined, color: AppTheme.primaryLight, size: 20),
                                 const SizedBox(width: 12),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text('PROMO CODE (20% OFF FOR FANS)', style: TextStyle(color: AppTheme.textMuted, fontSize: 11)),
-                                    Text(_promoCode, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 1.5)),
-                                  ],
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text('PROMO CODE (20% OFF FOR FANS)', style: TextStyle(color: AppTheme.textMuted, fontSize: 11)),
+                                      Text(promoCode, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 1.5), overflow: TextOverflow.ellipsis),
+                                    ],
+                                  ),
                                 ),
-                                const Spacer(),
                                 IconButton(
                                   icon: const Icon(Icons.copy, size: 18),
-                                  onPressed: () => _copyToClipboard(_promoCode, 'Promo code'),
+                                  onPressed: () => _copyToClipboard(promoCode, 'Promo code'),
                                   tooltip: 'Copy Code',
                                 ),
                               ],
@@ -146,13 +157,13 @@ class _InfluencerDashboardScreenState extends State<InfluencerDashboardScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       const Text('CANONICAL REFERRAL URL', style: TextStyle(color: AppTheme.textMuted, fontSize: 11)),
-                                      Text(_referralUrl, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
+                                      Text(referralUrl, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
                                     ],
                                   ),
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.copy, size: 18),
-                                  onPressed: () => _copyToClipboard(_referralUrl, 'Referral link'),
+                                  onPressed: () => _copyToClipboard(referralUrl, 'Referral link'),
                                   tooltip: 'Copy Link',
                                 ),
                               ],
@@ -175,11 +186,11 @@ class _InfluencerDashboardScreenState extends State<InfluencerDashboardScreen> {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               childAspectRatio: 1.8,
-              children: const [
-                _StatCard(title: 'Link Clicks', value: '3,840', sub: '30-day window'),
-                _StatCard(title: 'Signups', value: '412', sub: '10.7% conversion'),
-                _StatCard(title: 'Paid Subscriptions', value: '86', sub: '₹42,900 revenue'),
-                _StatCard(title: 'Payable Balance', value: '₹4,290.00', sub: 'Eligible for payout', isHighlight: true),
+              children: [
+                _StatCard(title: 'Link Clicks', value: '${stats.totalClicks}', sub: 'All-time referral clicks'),
+                _StatCard(title: 'Pending Commission', value: '₹${stats.pendingCommissionInr.toStringAsFixed(2)}', sub: 'In hold period'),
+                _StatCard(title: 'Paid Payouts', value: '₹${stats.paidCommissionInr.toStringAsFixed(2)}', sub: 'Disbursed to bank'),
+                _StatCard(title: 'Payable Balance', value: '₹${stats.approvedCommissionInr.toStringAsFixed(2)}', sub: 'Eligible for payout', isHighlight: true),
               ],
             ),
             const SizedBox(height: 24),
@@ -193,38 +204,41 @@ class _InfluencerDashboardScreenState extends State<InfluencerDashboardScreen> {
                   children: [
                     const Text('Commission Earnings History', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     const SizedBox(height: 16),
-                    DataTable(
-                      headingRowColor: WidgetStateProperty.all(AppTheme.surfaceDark),
-                      columns: const [
-                        DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold))),
-                        DataColumn(label: Text('Event', style: TextStyle(fontWeight: FontWeight.bold))),
-                        DataColumn(label: Text('Customer Paid', style: TextStyle(fontWeight: FontWeight.bold))),
-                        DataColumn(label: Text('Commission (30%)', style: TextStyle(fontWeight: FontWeight.bold))),
-                        DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
-                      ],
-                      rows: const [
-                        DataRow(cells: [
-                          DataCell(Text('22 Sep 2026')),
-                          DataCell(Text('Pro Plan Monthly Subscription')),
-                          DataCell(Text('₹1,199.20')),
-                          DataCell(Text('₹359.76', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.success))),
-                          DataCell(Text('PENDING (HOLD)', style: TextStyle(color: AppTheme.warning, fontWeight: FontWeight.bold, fontSize: 11))),
-                        ]),
-                        DataRow(cells: [
-                          DataCell(Text('18 Sep 2026')),
-                          DataCell(Text('Starter Plan Annual Subscription')),
-                          DataCell(Text('₹4,790.00')),
-                          DataCell(Text('₹1,437.00', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.success))),
-                          DataCell(Text('PAYABLE', style: TextStyle(color: AppTheme.success, fontWeight: FontWeight.bold, fontSize: 11))),
-                        ]),
-                        DataRow(cells: [
-                          DataCell(Text('12 Sep 2026')),
-                          DataCell(Text('Pro Plan Monthly Subscription')),
-                          DataCell(Text('₹1,199.20')),
-                          DataCell(Text('₹359.76', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.success))),
-                          DataCell(Text('PAID', style: TextStyle(color: AppTheme.info, fontWeight: FontWeight.bold, fontSize: 11))),
-                        ]),
-                      ],
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: DataTable(
+                        headingRowColor: WidgetStateProperty.all(AppTheme.surfaceDark),
+                        columns: const [
+                          DataColumn(label: Text('Date', style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text('Event', style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text('Customer Paid', style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text('Commission (30%)', style: TextStyle(fontWeight: FontWeight.bold))),
+                          DataColumn(label: Text('Status', style: TextStyle(fontWeight: FontWeight.bold))),
+                        ],
+                        rows: const [
+                          DataRow(cells: [
+                            DataCell(Text('22 Sep 2026')),
+                            DataCell(Text('Pro Plan Monthly Subscription')),
+                            DataCell(Text('₹1,199.20')),
+                            DataCell(Text('₹359.76', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.success))),
+                            DataCell(Text('PENDING (HOLD)', style: TextStyle(color: AppTheme.warning, fontWeight: FontWeight.bold, fontSize: 11))),
+                          ]),
+                          DataRow(cells: [
+                            DataCell(Text('18 Sep 2026')),
+                            DataCell(Text('Starter Plan Annual Subscription')),
+                            DataCell(Text('₹4,790.00')),
+                            DataCell(Text('₹1,437.00', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.success))),
+                            DataCell(Text('PAYABLE', style: TextStyle(color: AppTheme.success, fontWeight: FontWeight.bold, fontSize: 11))),
+                          ]),
+                          DataRow(cells: [
+                            DataCell(Text('12 Sep 2026')),
+                            DataCell(Text('Pro Plan Monthly Subscription')),
+                            DataCell(Text('₹1,199.20')),
+                            DataCell(Text('₹359.76', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.success))),
+                            DataCell(Text('PAID', style: TextStyle(color: AppTheme.info, fontWeight: FontWeight.bold, fontSize: 11))),
+                          ]),
+                        ],
+                      ),
                     ),
                   ],
                 ),

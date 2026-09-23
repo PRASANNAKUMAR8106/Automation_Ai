@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../contacts_crm/data/crm_repository.dart';
 
-class InboxScreen extends StatefulWidget {
+class InboxScreen extends ConsumerStatefulWidget {
   const InboxScreen({super.key});
 
   @override
-  State<InboxScreen> createState() => _InboxScreenState();
+  ConsumerState<InboxScreen> createState() => _InboxScreenState();
 }
 
-class _InboxScreenState extends State<InboxScreen> {
+class _InboxScreenState extends ConsumerState<InboxScreen> {
   int _selectedChatIndex = 0;
   final TextEditingController _replyController = TextEditingController();
 
@@ -61,6 +63,9 @@ class _InboxScreenState extends State<InboxScreen> {
   void _sendReply() {
     final text = _replyController.text.trim();
     if (text.isEmpty) return;
+
+    final currentConvoId = _threads[_selectedChatIndex]['id'] as String? ?? 'conv-1';
+    ref.read(crmRepositoryProvider).sendReply(currentConvoId, text);
 
     setState(() {
       final messages = _threads[_selectedChatIndex]['messages'] as List;

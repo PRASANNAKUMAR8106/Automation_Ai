@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../data/analytics_repository.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -10,6 +11,8 @@ class DashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateNotifierProvider);
     final user = authState.user;
+    final analyticsAsync = ref.watch(analyticsFutureProvider);
+    final analytics = analyticsAsync.value ?? AnalyticsOverviewModel.defaultFallback;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -41,11 +44,31 @@ class DashboardScreen extends ConsumerWidget {
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
                   childAspectRatio: 1.8,
-                  children: const [
-                    _MetricCard(title: 'Comments Processed', value: '1,428', icon: Icons.comment_outlined, change: '+18.4% this week'),
-                    _MetricCard(title: 'DMs Dispatched', value: '1,392', icon: Icons.send_outlined, change: '+22.1% this week'),
-                    _MetricCard(title: 'Leads Captured', value: '384', icon: Icons.person_add_alt_outlined, change: '+9.2% this week'),
-                    _MetricCard(title: 'Active Workflows', value: '4 / 20', icon: Icons.bolt_outlined, change: 'Pro Plan Quota'),
+                  children: [
+                    _MetricCard(
+                      title: 'Comments Processed',
+                      value: '${analytics.commentsProcessed}',
+                      icon: Icons.comment_outlined,
+                      change: '+18.4% this week',
+                    ),
+                    _MetricCard(
+                      title: 'DMs Dispatched',
+                      value: '${analytics.dmsDispatched}',
+                      icon: Icons.send_outlined,
+                      change: '+22.1% this week',
+                    ),
+                    _MetricCard(
+                      title: 'Leads Captured',
+                      value: '${analytics.leadsCaptured}',
+                      icon: Icons.person_add_alt_outlined,
+                      change: '+9.2% this week',
+                    ),
+                    _MetricCard(
+                      title: 'Active Workflows',
+                      value: '${analytics.activeWorkflows} / ${analytics.maxWorkflows}',
+                      icon: Icons.bolt_outlined,
+                      change: 'Quota Limit',
+                    ),
                   ],
                 );
               },
@@ -122,7 +145,14 @@ class _MetricCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(title, style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Icon(icon, size: 18, color: AppTheme.primaryLight),
               ],
             ),
