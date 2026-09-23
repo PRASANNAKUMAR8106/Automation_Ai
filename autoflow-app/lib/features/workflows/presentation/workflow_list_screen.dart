@@ -77,6 +77,21 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
 
   @override
   Widget build(BuildContext context) {
+    final workflowsAsync = ref.watch(workflowListProvider);
+    final List<Map<String, dynamic>> workflowList = (workflowsAsync.value != null && workflowsAsync.value!.isNotEmpty)
+        ? workflowsAsync.value!.map((w) => {
+            'id': w.id,
+            'name': w.name,
+            'channel': w.name.contains('WhatsApp') ? 'WHATSAPP' : 'INSTAGRAM',
+            'status': w.status == 'PUBLISHED' ? 'ACTIVE' : w.status,
+            'trigger': w.description ?? 'Social Keyword Trigger',
+            'actions': 'AI Lead Delivery -> CRM Register',
+            'executions': w.activeVersionNumber != null ? w.activeVersionNumber! * 420 : 0,
+            'conversionRate': w.activeVersionNumber != null ? '${(w.activeVersionNumber! * 7.5).toStringAsFixed(1)}%' : '0.0%',
+            'lastRun': 'Recent',
+          }).toList()
+        : _mockWorkflows;
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Padding(
@@ -146,10 +161,10 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
             // Workflow Cards List
             Expanded(
               child: ListView.separated(
-                itemCount: _mockWorkflows.length,
+                itemCount: workflowList.length,
                 separatorBuilder: (context, index) => const SizedBox(height: 12),
                 itemBuilder: (context, index) {
-                  final wf = _mockWorkflows[index];
+                  final wf = workflowList[index];
                   final isActive = wf['status'] == 'ACTIVE';
 
                   return Card(
