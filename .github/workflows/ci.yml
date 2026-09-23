@@ -1,0 +1,110 @@
+name: AutoFlow AI - Monorepo CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Spring Boot Backend CI (Java 21 LTS)
+  # ---------------------------------------------------------------------------
+  backend-ci:
+    name: Backend Build & Test (Spring Boot 3.3 / Java 21)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x autoflow-backend/gradlew
+
+      - name: Compile Backend & Run Automated Tests
+        working-directory: ./autoflow-backend
+        run: ./gradlew test --rerun --no-daemon
+
+      - name: Publish Test Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-report
+          path: autoflow-backend/build/reports/tests/test/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 2. Flutter Mobile & Web Client CI (Flutter 3.x)
+  # ---------------------------------------------------------------------------
+  frontend-ci:
+    name: Frontend Lint & Test (Flutter 3.x)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.1'
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        working-directory: ./autoflow-app
+        run: flutter pub get
+
+      - name: Verify Code Formatting & Static Analysis
+        working-directory: ./autoflow-app
+        run: flutter analyze
+
+      - name: Run Widget & Repository Tests
+        working-directory: ./autoflow-app
+        run: flutter test
+
+  # ---------------------------------------------------------------------------
+  # 3. Secret & Credential Leakage Scanner
+  # ---------------------------------------------------------------------------
+  security-audit:
+    name: Secret & Credential Leak Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check for Prohibited Files
+        run: |
+          echo "Scanning workspace for prohibited credential files..."
+          FOUND_SECRETS=0
+
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "ERROR: .env file is tracked by git!"
+            FOUND_SECRETS=1
+          fi
+
+          for f in $(git ls-files | grep -E '\.(jks|keystore|p12|mobileprovision)$|key\.properties$' || true); do
+            if [ -n "$f" ]; then
+              echo "ERROR: Prohibited key/keystore file tracked: $f"
+              FOUND_SECRETS=1
+            fi
+          done
+
+          if [ $FOUND_SECRETS -eq 1 ]; then
+            echo "Security audit failed: Credentials or keystores detected in repository!"
+            exit 1
+          fi
+
+          echo "Security audit passed: No leaked credentials or secret files found."
