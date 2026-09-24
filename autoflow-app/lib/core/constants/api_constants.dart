@@ -47,6 +47,12 @@ class ApiConstants {
   static String crmConversationTyping(String id) => '/api/v1/crm/conversations/$id/typing';
   static String crmConversationResolve(String id) => '/api/v1/crm/conversations/$id/resolve';
 
+  // Campaigns & Broadcasts
+  static const String campaigns = '/api/v1/campaigns';
+  static const String campaignEstimateAudience = '/api/v1/campaigns/estimate-audience';
+  static String campaign(String id) => '/api/v1/campaigns/$id';
+  static String campaignCancel(String id) => '/api/v1/campaigns/$id/cancel';
+
   // Analytics & Funnels
   static const String analyticsOverview = '/api/v1/analytics/overview';
   static String analyticsWorkflowFunnel(String workflowId) => '/api/v1/analytics/funnels/$workflowId';

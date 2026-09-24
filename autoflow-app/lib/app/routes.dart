@@ -5,6 +5,7 @@ import '../features/auth/presentation/auth_controller.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/register_screen.dart';
 import '../features/billing/presentation/billing_screen.dart';
+import '../features/campaigns/presentation/campaigns_screen.dart';
 import '../features/contacts_crm/presentation/contacts_screen.dart';
 import '../features/dashboard/presentation/app_shell.dart';
 import '../features/dashboard/presentation/dashboard_screen.dart';
@@ -80,6 +81,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/contacts',
             builder: (context, state) => const ContactsScreen(),
+          ),
+          GoRoute(
+            path: '/campaigns',
+            builder: (context, state) => const CampaignsScreen(),
           ),
           GoRoute(
             path: '/influencer',

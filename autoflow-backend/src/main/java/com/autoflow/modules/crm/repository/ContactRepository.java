@@ -16,5 +16,7 @@ public interface ContactRepository extends JpaRepository<Contact, UUID> {
 
     List<Contact> findByOrganizationId(UUID organizationId);
 
+    List<Contact> findByOrganizationIdAndChannel(UUID organizationId, ChannelType channel);
+
     long countByOrganizationId(UUID organizationId);
 }
