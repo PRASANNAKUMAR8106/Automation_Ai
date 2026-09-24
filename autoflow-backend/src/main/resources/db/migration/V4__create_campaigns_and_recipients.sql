@@ -39,3 +39,4 @@ CREATE TABLE IF NOT EXISTS broadcast_recipients (
 );
 
 CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_campaign ON broadcast_recipients(campaign_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_broadcast_recipients_campaign_contact ON broadcast_recipients(campaign_id, contact_id);

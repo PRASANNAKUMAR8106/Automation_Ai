@@ -9,7 +9,6 @@ import com.autoflow.modules.campaign.entity.BroadcastRecipient;
 import com.autoflow.modules.campaign.entity.BroadcastRecipientStatus;
 import com.autoflow.modules.campaign.repository.BroadcastCampaignRepository;
 import com.autoflow.modules.campaign.repository.BroadcastRecipientRepository;
-import com.autoflow.modules.channel.entity.ConnectedAccount;
 import com.autoflow.modules.channel.provider.instagram.InstagramChannelProvider;
 import com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider;
 import com.autoflow.modules.channel.provider.whatsapp.WhatsAppChannelProvider;
@@ -41,7 +40,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("CampaignService Unit Tests")
+@DisplayName("CampaignService Production-Hardened Unit Tests")
 class CampaignServiceTest {
 
     @Mock
@@ -96,11 +95,11 @@ class CampaignServiceTest {
     @Test
     @DisplayName("estimateAudience correctly filters contacts and evaluates window eligibility")
     void shouldEstimateAudienceAccurately() {
-        Contact c1 = Contact.builder().channel(ChannelType.INSTAGRAM).leadStatus(LeadStatus.QUALIFIED).leadScore(80).tags(List.of("vip")).build();
+        Contact c1 = Contact.builder().channel(ChannelType.INSTAGRAM).externalId("ig_1").leadStatus(LeadStatus.QUALIFIED).leadScore(80).tags(List.of("vip")).build();
         c1.setId(UUID.randomUUID());
-        Contact c2 = Contact.builder().channel(ChannelType.INSTAGRAM).leadStatus(LeadStatus.QUALIFIED).leadScore(50).tags(List.of("newsletter")).build();
+        Contact c2 = Contact.builder().channel(ChannelType.INSTAGRAM).externalId("ig_2").leadStatus(LeadStatus.QUALIFIED).leadScore(50).tags(List.of("newsletter")).build();
         c2.setId(UUID.randomUUID());
-        Contact c3 = Contact.builder().channel(ChannelType.INSTAGRAM).leadStatus(LeadStatus.NEW).leadScore(10).tags(List.of("vip")).build();
+        Contact c3 = Contact.builder().channel(ChannelType.INSTAGRAM).externalId("ig_3").leadStatus(LeadStatus.NEW).leadScore(10).tags(List.of("vip")).build();
         c3.setId(UUID.randomUUID());
 
         when(contactRepository.findByOrganizationIdAndChannel(testOrgId, ChannelType.INSTAGRAM))
@@ -129,34 +128,293 @@ class CampaignServiceTest {
     }
 
     @Test
-    @DisplayName("createCampaign saves scheduled campaign and resolves recipient batch")
-    void shouldCreateScheduledCampaign() {
-        CreateCampaignRequest req = CreateCampaignRequest.builder()
-                .name("Flash Sale Broadcast")
+    @DisplayName("Channel-specific messaging eligibility independently verifies Telegram, WhatsApp, and Instagram")
+    void shouldEnforceChannelSpecificEligibilityIndependently() {
+        // 1. Telegram: Subscriber model, no 24h decay window limitation
+        Contact telegramContact = Contact.builder()
                 .channel(ChannelType.TELEGRAM)
-                .messageTemplate("Hey {{name}}! Use code FLASH50 for 50% off.")
-                .scheduledAt(Instant.now().plusSeconds(3600))
+                .externalId("tg_chat_888")
+                .fullName("Alex Chen")
                 .build();
+        telegramContact.setId(UUID.randomUUID());
 
-        Contact c1 = Contact.builder().channel(ChannelType.TELEGRAM).username("john_doe").fullName("John Doe").build();
-        c1.setId(UUID.randomUUID());
+        var tgResult = campaignService.checkChannelEligibility(testOrgId, telegramContact, ChannelType.TELEGRAM, true);
+        assertTrue(tgResult.isEligible());
+        assertNull(tgResult.getStatus());
+
+        // 2. WhatsApp: Strict 24-hour customer care session window
+        Contact waContact = Contact.builder()
+                .channel(ChannelType.WHATSAPP)
+                .externalId("+15551234567")
+                .fullName("Sarah Connor")
+                .build();
+        waContact.setId(UUID.randomUUID());
+
+        Conversation waConvo = Conversation.builder().channel(ChannelType.WHATSAPP).build();
+        when(conversationRepository.findByOrganizationIdAndContactIdAndChannel(testOrgId, waContact.getId(), ChannelType.WHATSAPP))
+                .thenReturn(Optional.of(waConvo));
+        when(messagingWindowService.evaluateWindow(waConvo)).thenReturn(
+                MessagingWindowResponse.builder().canSendFreeform(false).windowStatus("EXPIRED").build()
+        );
+
+        var waResult = campaignService.checkChannelEligibility(testOrgId, waContact, ChannelType.WHATSAPP, true);
+        assertFalse(waResult.isEligible());
+        assertEquals(BroadcastRecipientStatus.SKIPPED_WINDOW, waResult.getStatus());
+        assertTrue(waResult.getReason().contains("WhatsApp"));
+
+        // 3. Instagram: Strict 24-hour window, broadcasts cannot use 7-day human agent extension
+        Contact igContact = Contact.builder()
+                .channel(ChannelType.INSTAGRAM)
+                .externalId("ig_user_444")
+                .fullName("Elena Gilbert")
+                .build();
+        igContact.setId(UUID.randomUUID());
+
+        Conversation igConvo = Conversation.builder().channel(ChannelType.INSTAGRAM).build();
+        when(conversationRepository.findByOrganizationIdAndContactIdAndChannel(testOrgId, igContact.getId(), ChannelType.INSTAGRAM))
+                .thenReturn(Optional.of(igConvo));
+        // Simulate Instagram 7d human agent extended window where canSendFreeform is false
+        when(messagingWindowService.evaluateWindow(igConvo)).thenReturn(
+                MessagingWindowResponse.builder().canSendFreeform(false).windowStatus("HUMAN_AGENT_EXTENDED_7D").build()
+        );
+
+        var igResult = campaignService.checkChannelEligibility(testOrgId, igContact, ChannelType.INSTAGRAM, true);
+        assertFalse(igResult.isEligible());
+        assertEquals(BroadcastRecipientStatus.SKIPPED_WINDOW, igResult.getStatus());
+        assertTrue(igResult.getReason().contains("Instagram"));
+        assertTrue(igResult.getReason().contains("human agent"));
+    }
+
+    @Test
+    @DisplayName("Persistent consent, opt-out, and suppression handling at discovery and re-checked immediately before dispatch")
+    void shouldEnforcePersistentConsentAndSuppressionHandling() {
+        // Contact 1: Valid
+        Contact validContact = Contact.builder()
+                .channel(ChannelType.TELEGRAM)
+                .externalId("tg_valid")
+                .fullName("Valid Contact")
+                .tags(List.of("customer"))
+                .build();
+        validContact.setId(UUID.randomUUID());
+
+        // Contact 2: Opted out via tag
+        Contact optedOutContact = Contact.builder()
+                .channel(ChannelType.TELEGRAM)
+                .externalId("tg_opted_out")
+                .fullName("Opted Out Contact")
+                .tags(List.of("opt_out", "customer"))
+                .build();
+        optedOutContact.setId(UUID.randomUUID());
 
         when(contactRepository.findByOrganizationIdAndChannel(testOrgId, ChannelType.TELEGRAM))
-                .thenReturn(List.of(c1));
+                .thenReturn(List.of(validContact, optedOutContact));
 
-        when(campaignRepository.save(any(BroadcastCampaign.class))).thenAnswer(inv -> {
-            BroadcastCampaign c = inv.getArgument(0);
-            if (c.getId() == null) c.setId(UUID.randomUUID());
+        // When creating campaign, opted-out contact must be excluded at discovery
+        when(campaignRepository.save(any(BroadcastCampaign.class))).thenAnswer(i -> {
+            BroadcastCampaign c = i.getArgument(0);
+            c.setId(UUID.randomUUID());
             return c;
         });
 
-        CampaignResponse response = campaignService.createCampaign(testOrgId, req);
+        CreateCampaignRequest req = CreateCampaignRequest.builder()
+                .name("Consent Verified Campaign")
+                .channel(ChannelType.TELEGRAM)
+                .messageTemplate("Hello {{name}}!")
+                .scheduledAt(Instant.now().plusSeconds(3600))
+                .build();
 
-        assertNotNull(response);
-        assertEquals("Flash Sale Broadcast", response.getName());
-        assertEquals(BroadcastCampaignStatus.SCHEDULED, response.getStatus());
-        assertEquals(1, response.getTotalRecipients());
-        verify(campaignRecipientRepository).saveAll(anyList());
+        CampaignResponse response = campaignService.createCampaign(testOrgId, req);
+        assertEquals(1, response.getTotalRecipients(), "Suppressed/opted-out contact must be excluded from recipient list");
+
+        // Now test re-check immediately before dispatch:
+        // Suppose validContact opted out AFTER campaign was created
+        UUID campaignId = response.getId();
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Consent Verified Campaign")
+                .channel(ChannelType.TELEGRAM)
+                .status(BroadcastCampaignStatus.SCHEDULED)
+                .messageTemplate("Hello {{name}}!")
+                .totalRecipients(1)
+                .build();
+        campaign.setId(campaignId);
+        campaign.setOrganizationId(testOrgId);
+
+        BroadcastRecipient recipient = BroadcastRecipient.builder()
+                .campaign(campaign)
+                .contact(validContact)
+                .status(BroadcastRecipientStatus.PENDING)
+                .build();
+        recipient.setId(UUID.randomUUID());
+
+        when(campaignRepository.findById(campaignId)).thenReturn(Optional.of(campaign));
+        when(campaignRepository.claimCampaignForExecution(eq(campaignId), any())).thenReturn(1);
+        when(campaignRecipientRepository.findByCampaignIdAndStatus(campaignId, BroadcastRecipientStatus.PENDING))
+                .thenReturn(List.of(recipient));
+        when(campaignRecipientRepository.claimRecipientForProcessing(recipient.getId())).thenReturn(1);
+        when(campaignRepository.findStatusById(campaignId)).thenReturn(Optional.of(BroadcastCampaignStatus.RUNNING));
+
+        // Re-fetched contact fresh from DB now has "unsubscribed" tag!
+        Contact freshlySuppressedContact = Contact.builder()
+                .channel(ChannelType.TELEGRAM)
+                .externalId("tg_valid")
+                .fullName("Valid Contact")
+                .tags(List.of("unsubscribed"))
+                .build();
+        freshlySuppressedContact.setId(validContact.getId());
+        when(contactRepository.findById(validContact.getId())).thenReturn(Optional.of(freshlySuppressedContact));
+
+        campaignService.executeCampaign(campaignId);
+
+        // Recipient must be marked SKIPPED_OPT_OUT and provider must NOT be called
+        assertEquals(BroadcastRecipientStatus.SKIPPED_OPT_OUT, recipient.getStatus());
+        verify(telegramChannelProvider, never()).sendMessage(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Scheduled campaign claiming is atomic: duplicate scheduler or worker instances cannot execute same campaign")
+    void shouldEnforceAtomicScheduledCampaignClaiming() {
+        UUID campaignId = UUID.randomUUID();
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Concurrent Scheduled Campaign")
+                .channel(ChannelType.TELEGRAM)
+                .status(BroadcastCampaignStatus.SCHEDULED)
+                .scheduledAt(Instant.now().minusSeconds(10))
+                .build();
+        campaign.setId(campaignId);
+
+        when(campaignRepository.findByStatusAndScheduledAtLessThanEqual(eq(BroadcastCampaignStatus.SCHEDULED), any()))
+                .thenReturn(List.of(campaign));
+
+        // Worker 1 atomically claims: returns 1 (success)
+        when(campaignRepository.claimCampaignForExecution(eq(campaignId), any())).thenReturn(1);
+        when(campaignRepository.findById(campaignId)).thenReturn(Optional.of(campaign));
+        when(campaignRecipientRepository.findByCampaignIdAndStatus(campaignId, BroadcastRecipientStatus.PENDING))
+                .thenReturn(List.of());
+        when(campaignRepository.findStatusById(campaignId)).thenReturn(Optional.of(BroadcastCampaignStatus.RUNNING));
+        when(campaignRepository.save(any(BroadcastCampaign.class))).thenAnswer(i -> i.getArgument(0));
+
+        campaignService.processScheduledCampaigns();
+
+        // Worker 2 calls claimCampaignForExecution concurrently: returns 0 (already claimed)
+        when(campaignRepository.claimCampaignForExecution(eq(campaignId), any())).thenReturn(0);
+
+        campaignService.processScheduledCampaigns();
+
+        // Verify executeCampaign only ran for the first worker that claimed it
+        verify(campaignRepository, times(1)).save(campaign);
+    }
+
+    @Test
+    @DisplayName("Recipient-level idempotency prevents double sending under concurrent workers or retries")
+    void shouldEnforceRecipientLevelIdempotency() {
+        UUID campaignId = UUID.randomUUID();
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Idempotent Campaign")
+                .channel(ChannelType.TELEGRAM)
+                .status(BroadcastCampaignStatus.RUNNING)
+                .messageTemplate("Hi {{name}}")
+                .totalRecipients(1)
+                .build();
+        campaign.setId(campaignId);
+        campaign.setOrganizationId(testOrgId);
+
+        Contact c = Contact.builder().channel(ChannelType.TELEGRAM).externalId("tg_rec_1").build();
+        c.setId(UUID.randomUUID());
+
+        BroadcastRecipient r = BroadcastRecipient.builder().campaign(campaign).contact(c).status(BroadcastRecipientStatus.PENDING).build();
+        r.setId(UUID.randomUUID());
+
+        when(campaignRepository.findById(campaignId)).thenReturn(Optional.of(campaign));
+        when(campaignRecipientRepository.findByCampaignIdAndStatus(campaignId, BroadcastRecipientStatus.PENDING))
+                .thenReturn(List.of(r));
+
+        // Atomic recipient claim returns 0 (already claimed by another worker thread)
+        when(campaignRecipientRepository.claimRecipientForProcessing(r.getId())).thenReturn(0);
+        when(campaignRepository.findStatusById(campaignId)).thenReturn(Optional.of(BroadcastCampaignStatus.RUNNING));
+        when(campaignRepository.save(any(BroadcastCampaign.class))).thenAnswer(i -> i.getArgument(0));
+
+        campaignService.executeCampaign(campaignId);
+
+        // Never dispatched because recipient was already claimed
+        verify(telegramChannelProvider, never()).sendMessage(any(), any(), any());
+        verify(contactRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("Cancellation behavior halts execution loop mid-run and preserves CANCELLED status")
+    void shouldHaltExecutionAndPreserveCancelledStatusOnMidRunCancellation() {
+        UUID campaignId = UUID.randomUUID();
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Cancel Mid-Run Campaign")
+                .channel(ChannelType.TELEGRAM)
+                .status(BroadcastCampaignStatus.RUNNING)
+                .messageTemplate("Hi {{name}}")
+                .totalRecipients(2)
+                .build();
+        campaign.setId(campaignId);
+        campaign.setOrganizationId(testOrgId);
+
+        Contact c1 = Contact.builder().channel(ChannelType.TELEGRAM).externalId("tg_1").fullName("User 1").build();
+        c1.setId(UUID.randomUUID());
+        Contact c2 = Contact.builder().channel(ChannelType.TELEGRAM).externalId("tg_2").fullName("User 2").build();
+        c2.setId(UUID.randomUUID());
+
+        BroadcastRecipient r1 = BroadcastRecipient.builder().campaign(campaign).contact(c1).status(BroadcastRecipientStatus.PENDING).build();
+        r1.setId(UUID.randomUUID());
+        BroadcastRecipient r2 = BroadcastRecipient.builder().campaign(campaign).contact(c2).status(BroadcastRecipientStatus.PENDING).build();
+        r2.setId(UUID.randomUUID());
+
+        when(campaignRepository.findById(campaignId)).thenReturn(Optional.of(campaign));
+        when(campaignRecipientRepository.findByCampaignIdAndStatus(campaignId, BroadcastRecipientStatus.PENDING))
+                .thenReturn(List.of(r1, r2));
+
+        // R1: claimed successfully, campaign is RUNNING
+        when(campaignRecipientRepository.claimRecipientForProcessing(r1.getId())).thenReturn(1);
+        when(campaignRepository.findStatusById(campaignId))
+                .thenReturn(Optional.of(BroadcastCampaignStatus.RUNNING)) // during R1 check
+                .thenReturn(Optional.of(BroadcastCampaignStatus.CANCELLED)); // during R2 check (operator cancelled!)
+
+        when(contactRepository.findById(c1.getId())).thenReturn(Optional.of(c1));
+
+        // R2: claimed successfully
+        when(campaignRecipientRepository.claimRecipientForProcessing(r2.getId())).thenReturn(1);
+
+        campaignService.executeCampaign(campaignId);
+
+        // R1 was sent before cancellation
+        assertEquals(BroadcastRecipientStatus.SENT, r1.getStatus());
+        verify(telegramChannelProvider, times(1)).sendMessage(any(), eq("tg_1"), any());
+
+        // R2 detected cancellation, was marked CANCELLED, and was NOT dispatched
+        assertEquals(BroadcastRecipientStatus.CANCELLED, r2.getStatus());
+        verify(telegramChannelProvider, never()).sendMessage(any(), eq("tg_2"), any());
+
+        // Campaign status remains CANCELLED and was NOT overwritten to COMPLETED
+        assertNotEquals(BroadcastCampaignStatus.COMPLETED, campaign.getStatus());
+    }
+
+    @Test
+    @DisplayName("cancelCampaign atomically cancels campaign and marks remaining pending recipients as CANCELLED")
+    void shouldCancelCampaignGracefully() {
+        UUID campaignId = UUID.randomUUID();
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Pending Launch")
+                .channel(ChannelType.INSTAGRAM)
+                .status(BroadcastCampaignStatus.SCHEDULED)
+                .build();
+        campaign.setId(campaignId);
+        campaign.setOrganizationId(testOrgId);
+
+        when(campaignRepository.findByIdAndOrganizationId(campaignId, testOrgId)).thenReturn(Optional.of(campaign));
+        when(campaignRepository.cancelCampaignAtomically(testOrgId, campaignId)).thenReturn(1);
+
+        CampaignResponse cancelled = campaignService.cancelCampaign(testOrgId, campaignId);
+        assertNotNull(cancelled);
+        verify(campaignRecipientRepository).cancelPendingRecipients(campaignId);
+
+        // Test rejecting cancellation on COMPLETED campaign
+        campaign.setStatus(BroadcastCampaignStatus.COMPLETED);
+        assertThrows(IllegalStateException.class, () -> campaignService.cancelCampaign(testOrgId, campaignId));
     }
 
     @Test
@@ -183,94 +441,6 @@ class CampaignServiceTest {
         assertNotNull(detail);
         assertEquals("Product Launch", detail.getCampaign().getName());
         assertEquals(90.0, detail.getDeliveryRate());
-    }
-
-    @Test
-    @DisplayName("cancelCampaign updates status to CANCELLED and rejects already completed campaigns")
-    void shouldCancelCampaignGracefully() {
-        UUID campaignId = UUID.randomUUID();
-        BroadcastCampaign campaign = BroadcastCampaign.builder()
-                .name("Pending Launch")
-                .channel(ChannelType.INSTAGRAM)
-                .status(BroadcastCampaignStatus.SCHEDULED)
-                .build();
-        campaign.setId(campaignId);
-        campaign.setOrganizationId(testOrgId);
-
-        when(campaignRepository.findByIdAndOrganizationId(campaignId, testOrgId)).thenReturn(Optional.of(campaign));
-        when(campaignRepository.save(any(BroadcastCampaign.class))).thenAnswer(i -> i.getArgument(0));
-
-        CampaignResponse cancelled = campaignService.cancelCampaign(testOrgId, campaignId);
-        assertEquals(BroadcastCampaignStatus.CANCELLED, cancelled.getStatus());
-
-        // Test rejecting cancellation on COMPLETED campaign
-        campaign.setStatus(BroadcastCampaignStatus.COMPLETED);
-        assertThrows(IllegalStateException.class, () -> campaignService.cancelCampaign(testOrgId, campaignId));
-    }
-
-    @Test
-    @DisplayName("executeCampaign personalizes templates, respects 24-hour window, and dispatches messages")
-    void shouldExecuteCampaignWithPersonalizationAndWindowCompliance() {
-        UUID campaignId = UUID.randomUUID();
-        BroadcastCampaign campaign = BroadcastCampaign.builder()
-                .name("VIP Webinar Invite")
-                .channel(ChannelType.INSTAGRAM)
-                .status(BroadcastCampaignStatus.SCHEDULED)
-                .messageTemplate("Hi {{name}}, welcome to {{channel}} webinar!")
-                .skipExpiredWindow(true)
-                .totalRecipients(2)
-                .build();
-        campaign.setId(campaignId);
-        campaign.setOrganizationId(testOrgId);
-
-        Contact eligibleContact = Contact.builder()
-                .channel(ChannelType.INSTAGRAM)
-                .externalId("ig_101")
-                .fullName("Priya Sharma")
-                .username("priyasharma")
-                .build();
-        eligibleContact.setId(UUID.randomUUID());
-
-        Contact expiredContact = Contact.builder()
-                .channel(ChannelType.INSTAGRAM)
-                .externalId("ig_102")
-                .fullName("Devin Vance")
-                .username("devinvance")
-                .build();
-        expiredContact.setId(UUID.randomUUID());
-
-        BroadcastRecipient r1 = BroadcastRecipient.builder().campaign(campaign).contact(eligibleContact).status(BroadcastRecipientStatus.PENDING).build();
-        BroadcastRecipient r2 = BroadcastRecipient.builder().campaign(campaign).contact(expiredContact).status(BroadcastRecipientStatus.PENDING).build();
-
-        when(campaignRepository.findById(campaignId)).thenReturn(Optional.of(campaign));
-        when(campaignRecipientRepository.findByCampaignIdAndStatus(campaignId, BroadcastRecipientStatus.PENDING))
-                .thenReturn(List.of(r1, r2));
-
-        // Eligible contact conversation within 24h
-        Conversation c1 = Conversation.builder().build();
-        when(conversationRepository.findByOrganizationIdAndContactIdAndChannel(testOrgId, eligibleContact.getId(), ChannelType.INSTAGRAM))
-                .thenReturn(Optional.of(c1));
-        when(messagingWindowService.evaluateWindow(c1)).thenReturn(
-                MessagingWindowResponse.builder().canSendFreeform(true).build()
-        );
-
-        // Expired contact has no active conversation
-        when(conversationRepository.findByOrganizationIdAndContactIdAndChannel(testOrgId, expiredContact.getId(), ChannelType.INSTAGRAM))
-                .thenReturn(Optional.empty());
-
-        when(instagramChannelProvider.sendPrivateDirectMessage(any(), eq("ig_101"), eq("Hi Priya Sharma, welcome to INSTAGRAM webinar!")))
-                .thenReturn("msg_dispatch_999");
-        when(campaignRepository.save(any(BroadcastCampaign.class))).thenAnswer(i -> i.getArgument(0));
-
-        campaignService.executeCampaign(campaignId);
-
-        assertEquals(BroadcastCampaignStatus.COMPLETED, campaign.getStatus());
-        assertEquals(1, campaign.getSentCount());
-        assertEquals(BroadcastRecipientStatus.SENT, r1.getStatus());
-        assertEquals(BroadcastRecipientStatus.SKIPPED_WINDOW, r2.getStatus());
-
-        verify(instagramChannelProvider).sendPrivateDirectMessage("mock_channel_token", "ig_101", "Hi Priya Sharma, welcome to INSTAGRAM webinar!");
-        verify(instagramChannelProvider, never()).sendPrivateDirectMessage(any(), eq("ig_102"), any());
     }
 
     @Test

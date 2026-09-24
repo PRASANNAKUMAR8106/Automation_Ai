@@ -61,7 +61,8 @@ public class CampaignServiceImpl implements CampaignService {
         int ineligible = 0;
 
         for (Contact c : matching) {
-            if (isContactEligibleForChannel(organizationId, c, request.getChannel())) {
+            EligibilityResult res = checkChannelEligibility(organizationId, c, request.getChannel(), true);
+            if (res.isEligible()) {
                 eligible++;
             } else {
                 ineligible++;
@@ -101,7 +102,7 @@ public class CampaignServiceImpl implements CampaignService {
 
         BroadcastCampaign savedCampaign = campaignRepository.save(campaign);
 
-        // Fetch matching recipients
+        // Fetch matching recipients (already filters out opted-out / suppressed contacts)
         List<Contact> matchingContacts = getMatchingContacts(
                 organizationId,
                 request.getChannel(),
@@ -179,9 +180,16 @@ public class CampaignServiceImpl implements CampaignService {
             throw new IllegalStateException("Cannot cancel a campaign that is already " + campaign.getStatus());
         }
 
-        campaign.setStatus(BroadcastCampaignStatus.CANCELLED);
-        campaign = campaignRepository.save(campaign);
-        log.info("Cancelled campaign {} for org {}", campaignId, organizationId);
+        // Atomically cancel campaign
+        campaignRepository.cancelCampaignAtomically(organizationId, campaignId);
+
+        // Atomically cancel any remaining pending/processing recipients
+        campaignRecipientRepository.cancelPendingRecipients(campaignId);
+
+        campaign = campaignRepository.findByIdAndOrganizationId(campaignId, organizationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Campaign", campaignId));
+
+        log.info("Cancelled campaign {} and marked remaining recipients CANCELLED for org {}", campaignId, organizationId);
         return toCampaignResponse(campaign);
     }
 
@@ -194,10 +202,16 @@ public class CampaignServiceImpl implements CampaignService {
         );
 
         for (BroadcastCampaign campaign : dueCampaigns) {
-            try {
-                executeCampaign(campaign.getId());
-            } catch (Exception e) {
-                log.error("Failed to trigger scheduled campaign {}: {}", campaign.getId(), e.getMessage(), e);
+            // Atomic claim prevents multiple scheduler instances from picking up the same campaign
+            int claimed = campaignRepository.claimCampaignForExecution(campaign.getId(), Instant.now());
+            if (claimed > 0) {
+                try {
+                    executeCampaign(campaign.getId());
+                } catch (Exception e) {
+                    log.error("Failed to trigger scheduled campaign {}: {}", campaign.getId(), e.getMessage(), e);
+                }
+            } else {
+                log.debug("Campaign {} already claimed by another scheduler instance.", campaign.getId());
             }
         }
     }
@@ -210,13 +224,19 @@ public class CampaignServiceImpl implements CampaignService {
         if (campaignOpt.isEmpty()) return;
 
         BroadcastCampaign campaign = campaignOpt.get();
-        if (campaign.getStatus() != BroadcastCampaignStatus.SCHEDULED && campaign.getStatus() != BroadcastCampaignStatus.RUNNING) {
+        if (campaign.getStatus() == BroadcastCampaignStatus.CANCELLED || campaign.getStatus() == BroadcastCampaignStatus.COMPLETED) {
             return;
         }
 
-        campaign.setStatus(BroadcastCampaignStatus.RUNNING);
-        campaign.setStartedAt(Instant.now());
-        campaign = campaignRepository.save(campaign);
+        // If not already in RUNNING status, claim it atomically
+        if (campaign.getStatus() == BroadcastCampaignStatus.SCHEDULED) {
+            int claimed = campaignRepository.claimCampaignForExecution(campaignId, Instant.now());
+            if (claimed == 0) {
+                log.info("Campaign {} was already claimed by another worker instance.", campaignId);
+                return;
+            }
+            campaign = campaignRepository.findById(campaignId).orElse(campaign);
+        }
 
         log.info("Executing broadcast campaign {} ({}) on channel {}", campaign.getId(), campaign.getName(), campaign.getChannel());
 
@@ -231,20 +251,52 @@ public class CampaignServiceImpl implements CampaignService {
         int failed = 0;
 
         for (BroadcastRecipient recipient : pendingRecipients) {
-            Contact contact = recipient.getContact();
+            // 1. Recipient-level atomic claiming: ensures concurrent workers/retries never send twice
+            int claimed = campaignRecipientRepository.claimRecipientForProcessing(recipient.getId());
+            if (claimed == 0) {
+                log.debug("Recipient {} already claimed/processed by another thread.", recipient.getId());
+                continue;
+            }
 
-            // 1. Meta 24-hour compliance check
-            if (campaign.isSkipExpiredWindow() && !isContactEligibleForChannel(campaign.getOrganizationId(), contact, campaign.getChannel())) {
-                recipient.setStatus(BroadcastRecipientStatus.SKIPPED_WINDOW);
-                recipient.setErrorMessage("Skipped: Outside Meta 24-hour customer care session window.");
+            // 2. Cancellation check: if campaign was cancelled during processing, halt immediately
+            Optional<BroadcastCampaignStatus> currentCampaignStatus = campaignRepository.findStatusById(campaignId);
+            if (currentCampaignStatus.isEmpty() || currentCampaignStatus.get() == BroadcastCampaignStatus.CANCELLED) {
+                recipient.setStatus(BroadcastRecipientStatus.CANCELLED);
+                recipient.setErrorMessage("Campaign was cancelled during execution.");
+                campaignRecipientRepository.save(recipient);
+                log.info("Campaign {} was cancelled mid-run. Aborting recipient loop.", campaignId);
+                break;
+            }
+
+            // 3. Re-fetch Contact fresh from DB immediately before dispatch (persistent consent & suppression check)
+            Contact contact = contactRepository.findById(recipient.getContact().getId()).orElse(null);
+            if (contact == null) {
+                recipient.setStatus(BroadcastRecipientStatus.FAILED);
+                recipient.setErrorMessage("Contact no longer exists in database.");
+                campaignRecipientRepository.save(recipient);
+                failed++;
+                continue;
+            }
+
+            // 4. Verify channel eligibility and opt-out / suppression
+            EligibilityResult eligibility = checkChannelEligibility(
+                    campaign.getOrganizationId(),
+                    contact,
+                    campaign.getChannel(),
+                    campaign.isSkipExpiredWindow()
+            );
+
+            if (!eligibility.isEligible()) {
+                recipient.setStatus(eligibility.getStatus());
+                recipient.setErrorMessage(eligibility.getReason());
                 campaignRecipientRepository.save(recipient);
                 continue;
             }
 
-            // 2. Personalize template variables
+            // 5. Personalize template variables
             String personalizedMessage = personalize(campaign.getMessageTemplate(), contact, campaign.getChannel());
 
-            // 3. Dispatch to Channel Provider
+            // 6. Dispatch to Channel Provider
             try {
                 dispatchMessage(campaign.getChannel(), token, contact.getExternalId(), personalizedMessage, campaign.getMediaUrl());
                 recipient.setStatus(BroadcastRecipientStatus.SENT);
@@ -260,6 +312,14 @@ public class CampaignServiceImpl implements CampaignService {
             campaignRecipientRepository.save(recipient);
         }
 
+        // Verify campaign was not cancelled while processing
+        Optional<BroadcastCampaignStatus> finalStatus = campaignRepository.findStatusById(campaignId);
+        if (finalStatus.isPresent() && finalStatus.get() == BroadcastCampaignStatus.CANCELLED) {
+            log.info("Campaign {} was cancelled during execution. Preserving CANCELLED state.", campaignId);
+            return;
+        }
+
+        campaign = campaignRepository.findById(campaignId).orElse(campaign);
         campaign.setSentCount(campaign.getSentCount() + sent);
         campaign.setDeliveredCount(campaign.getDeliveredCount() + sent);
         campaign.setFailedCount(campaign.getFailedCount() + failed);
@@ -267,7 +327,7 @@ public class CampaignServiceImpl implements CampaignService {
         campaign.setStatus(BroadcastCampaignStatus.COMPLETED);
         campaignRepository.save(campaign);
 
-        log.info("Completed campaign {}: {} sent, {} failed, {} skipped window",
+        log.info("Completed campaign {}: {} sent, {} failed, {} remaining/skipped",
                 campaign.getId(), sent, failed, campaign.getTotalRecipients() - (sent + failed));
     }
 
@@ -275,6 +335,13 @@ public class CampaignServiceImpl implements CampaignService {
         List<Contact> all = contactRepository.findByOrganizationIdAndChannel(organizationId, channel);
         return all.stream()
                 .filter(c -> {
+                    // Persistent opt-out / suppression check at discovery
+                    if (c.isSuppressed()) {
+                        return false;
+                    }
+                    if (c.getExternalId() == null || c.getExternalId().trim().isEmpty()) {
+                        return false;
+                    }
                     if (leadStatus != null && c.getLeadStatus() != leadStatus) {
                         return false;
                     }
@@ -291,15 +358,75 @@ public class CampaignServiceImpl implements CampaignService {
                 .toList();
     }
 
-    private boolean isContactEligibleForChannel(UUID organizationId, Contact contact, ChannelType channel) {
+    /**
+     * Verifies channel-specific messaging eligibility independently for Instagram, WhatsApp, and Telegram.
+     */
+    public EligibilityResult checkChannelEligibility(UUID organizationId, Contact contact, ChannelType channel, boolean skipExpiredWindow) {
+        if (contact == null || contact.getExternalId() == null || contact.getExternalId().trim().isEmpty()) {
+            return EligibilityResult.ineligible("Missing valid channel recipient externalId", BroadcastRecipientStatus.FAILED);
+        }
+
+        if (contact.isSuppressed()) {
+            return EligibilityResult.ineligible("Recipient has opted out or is suppressed", BroadcastRecipientStatus.SKIPPED_OPT_OUT);
+        }
+
+        // 1. TELEGRAM: Subscriber model; no 24-hour decay window
         if (channel == ChannelType.TELEGRAM) {
-            return true;
+            return EligibilityResult.eligible();
         }
-        Optional<Conversation> convoOpt = conversationRepository.findByOrganizationIdAndContactIdAndChannel(organizationId, contact.getId(), channel);
-        if (convoOpt.isEmpty()) {
-            return false;
+
+        // 2. WHATSAPP: Strict 24-hour customer care session window
+        if (channel == ChannelType.WHATSAPP) {
+            Optional<Conversation> convoOpt = conversationRepository.findByOrganizationIdAndContactIdAndChannel(organizationId, contact.getId(), channel);
+            if (convoOpt.isEmpty()) {
+                return skipExpiredWindow
+                        ? EligibilityResult.ineligible("Outside WhatsApp 24-hour customer care session window (no conversation)", BroadcastRecipientStatus.SKIPPED_WINDOW)
+                        : EligibilityResult.eligible();
+            }
+
+            var window = messagingWindowService.evaluateWindow(convoOpt.get());
+            if (!window.isCanSendFreeform()) {
+                return skipExpiredWindow
+                        ? EligibilityResult.ineligible("WhatsApp 24-hour customer care session expired", BroadcastRecipientStatus.SKIPPED_WINDOW)
+                        : EligibilityResult.eligible();
+            }
+            return EligibilityResult.eligible();
         }
-        return messagingWindowService.evaluateWindow(convoOpt.get()).isCanSendFreeform();
+
+        // 3. INSTAGRAM: Strict 24-hour window. Broadcast campaigns are automated marketing and cannot use 7-day human agent extension
+        if (channel == ChannelType.INSTAGRAM) {
+            Optional<Conversation> convoOpt = conversationRepository.findByOrganizationIdAndContactIdAndChannel(organizationId, contact.getId(), channel);
+            if (convoOpt.isEmpty()) {
+                return skipExpiredWindow
+                        ? EligibilityResult.ineligible("Outside Instagram 24-hour customer care session window (no conversation)", BroadcastRecipientStatus.SKIPPED_WINDOW)
+                        : EligibilityResult.eligible();
+            }
+
+            var window = messagingWindowService.evaluateWindow(convoOpt.get());
+            if (!window.isCanSendFreeform()) {
+                return skipExpiredWindow
+                        ? EligibilityResult.ineligible("Instagram 24-hour session window expired (broadcasts cannot use 7-day human agent extension)", BroadcastRecipientStatus.SKIPPED_WINDOW)
+                        : EligibilityResult.eligible();
+            }
+            return EligibilityResult.eligible();
+        }
+
+        return EligibilityResult.eligible();
+    }
+
+    @lombok.Value
+    public static class EligibilityResult {
+        boolean eligible;
+        String reason;
+        BroadcastRecipientStatus status;
+
+        public static EligibilityResult eligible() {
+            return new EligibilityResult(true, null, null);
+        }
+
+        public static EligibilityResult ineligible(String reason, BroadcastRecipientStatus status) {
+            return new EligibilityResult(false, reason, status);
+        }
     }
 
     private String personalize(String template, Contact contact, ChannelType channel) {

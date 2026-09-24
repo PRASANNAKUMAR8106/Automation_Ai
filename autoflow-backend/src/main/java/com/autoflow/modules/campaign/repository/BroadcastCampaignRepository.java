@@ -22,4 +22,18 @@ public interface BroadcastCampaignRepository extends JpaRepository<BroadcastCamp
     Page<BroadcastCampaign> findByOrganizationIdAndStatusOrderByCreatedAtDesc(UUID organizationId, BroadcastCampaignStatus status, Pageable pageable);
 
     List<BroadcastCampaign> findByStatusAndScheduledAtLessThanEqual(BroadcastCampaignStatus status, Instant now);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE BroadcastCampaign c SET c.status = com.autoflow.modules.campaign.entity.BroadcastCampaignStatus.RUNNING, c.startedAt = :now " +
+           "WHERE c.id = :id AND c.status = com.autoflow.modules.campaign.entity.BroadcastCampaignStatus.SCHEDULED")
+    int claimCampaignForExecution(@org.springframework.data.repository.query.Param("id") UUID id, @org.springframework.data.repository.query.Param("now") Instant now);
+
+    @org.springframework.data.jpa.repository.Query("SELECT c.status FROM BroadcastCampaign c WHERE c.id = :id")
+    Optional<BroadcastCampaignStatus> findStatusById(@org.springframework.data.repository.query.Param("id") UUID id);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE BroadcastCampaign c SET c.status = com.autoflow.modules.campaign.entity.BroadcastCampaignStatus.CANCELLED " +
+           "WHERE c.id = :id AND c.organizationId = :organizationId AND " +
+           "(c.status = com.autoflow.modules.campaign.entity.BroadcastCampaignStatus.SCHEDULED OR c.status = com.autoflow.modules.campaign.entity.BroadcastCampaignStatus.RUNNING)")
+    int cancelCampaignAtomically(@org.springframework.data.repository.query.Param("organizationId") UUID organizationId, @org.springframework.data.repository.query.Param("id") UUID id);
 }

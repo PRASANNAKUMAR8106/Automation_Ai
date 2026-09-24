@@ -103,6 +103,29 @@ class FakeCampaignRepository extends CampaignRepository {
     campaigns.add(created);
     return created;
   }
+
+  @override
+  Future<bool> cancelCampaign(String id) async {
+    final idx = campaigns.indexWhere((c) => c.id == id);
+    if (idx != -1) {
+      final old = campaigns[idx];
+      campaigns[idx] = CampaignModel(
+        id: old.id,
+        name: old.name,
+        channel: old.channel,
+        status: 'CANCELLED',
+        messageTemplate: old.messageTemplate,
+        targetTags: old.targetTags,
+        minLeadScore: old.minLeadScore,
+        skipExpiredWindow: old.skipExpiredWindow,
+        totalRecipients: old.totalRecipients,
+        sentCount: old.sentCount,
+        deliveredCount: old.deliveredCount,
+        failedCount: old.failedCount,
+      );
+    }
+    return true;
+  }
 }
 
 Widget createTestApp(Widget child, {List<Override> overrides = const []}) {
@@ -242,6 +265,14 @@ void main() {
       expect(detail.recentRecipients.first.contactName, 'Alice Smith');
       expect(detail.recentRecipients.first.status, 'DELIVERED');
       expect(detail.deliveryRate, 96.0);
+    });
+
+    test('CampaignRecipientModel handles hardened statuses', () {
+      final statuses = ['PROCESSING', 'SKIPPED_OPT_OUT', 'SKIPPED_POLICY', 'CANCELLED'];
+      for (final s in statuses) {
+        final r = CampaignRecipientModel.fromJson({'id': 'rec-$s', 'status': s});
+        expect(r.status, s);
+      }
     });
   });
 
@@ -397,6 +428,33 @@ void main() {
       // Verify snackbar is displayed
       expect(find.textContaining('New Launch Outbound'), findsWidgets);
       expect(find.textContaining('scheduled successfully!'), findsOneWidget);
+    });
+
+    testWidgets('Tapping Cancel on scheduled campaign calls cancelCampaign and updates UI', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+
+      final fakeRepo = FakeCampaignRepository();
+
+      await tester.pumpWidget(
+        createTestApp(
+          const CampaignsScreen(),
+          overrides: [
+            campaignRepositoryProvider.overrideWithValue(fakeRepo),
+            campaignsProvider.overrideWith((ref) async => fakeRepo.campaigns),
+          ],
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // Find cancel button for camp-test-2 (which is SCHEDULED)
+      final cancelBtn = find.byKey(const Key('cancel_button_camp-test-2'));
+      expect(cancelBtn, findsOneWidget);
+
+      await tester.tap(cancelBtn);
+      await tester.pumpAndSettle();
+
+      expect(fakeRepo.campaigns.firstWhere((c) => c.id == 'camp-test-2').status, 'CANCELLED');
     });
   });
 }

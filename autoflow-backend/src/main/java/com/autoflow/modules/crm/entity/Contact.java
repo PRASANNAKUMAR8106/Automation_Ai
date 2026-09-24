@@ -68,4 +68,25 @@ public class Contact extends TenantAwareEntity {
     @Column(name = "last_interaction_at", nullable = false)
     @Builder.Default
     private Instant lastInteractionAt = Instant.now();
+
+    public boolean isOptedOut() {
+        if (tags != null) {
+            for (String tag : tags) {
+                if (tag != null) {
+                    String lower = tag.trim().toLowerCase();
+                    if (lower.equals("opt_out") || lower.equals("opted_out") ||
+                        lower.equals("unsubscribed") || lower.equals("suppressed") ||
+                        lower.equals("dnc") || lower.equals("do_not_contact") ||
+                        lower.equals("stop")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    public boolean isSuppressed() {
+        return isOptedOut();
+    }
 }

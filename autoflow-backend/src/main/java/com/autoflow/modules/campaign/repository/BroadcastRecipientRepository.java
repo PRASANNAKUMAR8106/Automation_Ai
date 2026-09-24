@@ -20,4 +20,15 @@ public interface BroadcastRecipientRepository extends JpaRepository<BroadcastRec
     long countByCampaignIdAndStatus(UUID campaignId, BroadcastRecipientStatus status);
 
     long countByCampaignId(UUID campaignId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE BroadcastRecipient r SET r.status = com.autoflow.modules.campaign.entity.BroadcastRecipientStatus.PROCESSING " +
+           "WHERE r.id = :recipientId AND r.status = com.autoflow.modules.campaign.entity.BroadcastRecipientStatus.PENDING")
+    int claimRecipientForProcessing(@org.springframework.data.repository.query.Param("recipientId") UUID recipientId);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE BroadcastRecipient r SET r.status = com.autoflow.modules.campaign.entity.BroadcastRecipientStatus.CANCELLED, " +
+           "r.errorMessage = 'Campaign was cancelled before dispatch.' " +
+           "WHERE r.campaign.id = :campaignId AND (r.status = com.autoflow.modules.campaign.entity.BroadcastRecipientStatus.PENDING OR r.status = com.autoflow.modules.campaign.entity.BroadcastRecipientStatus.PROCESSING)")
+    int cancelPendingRecipients(@org.springframework.data.repository.query.Param("campaignId") UUID campaignId);
 }

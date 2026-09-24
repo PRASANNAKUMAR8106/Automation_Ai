@@ -8,7 +8,9 @@ import lombok.*;
 import java.time.Instant;
 
 @Entity
-@Table(name = "broadcast_recipients")
+@Table(name = "broadcast_recipients", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_broadcast_recipient_campaign_contact", columnNames = {"campaign_id", "contact_id"})
+})
 @Getter
 @Setter
 @Builder
