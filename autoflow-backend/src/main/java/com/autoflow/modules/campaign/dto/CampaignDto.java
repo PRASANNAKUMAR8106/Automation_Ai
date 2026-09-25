@@ -77,6 +77,9 @@ public class CampaignDto {
         private BroadcastRecipientStatus status;
         private String errorMessage;
         private Instant sentAt;
+        private String idempotencyKey;
+        private String providerMessageId;
+        private int attemptCount;
     }
 
     @Data

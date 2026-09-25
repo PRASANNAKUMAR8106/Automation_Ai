@@ -36,4 +36,17 @@ public class BroadcastRecipient extends BaseEntity {
 
     @Column(name = "sent_at")
     private Instant sentAt;
+
+    @Column(name = "idempotency_key", length = 100)
+    private String idempotencyKey;
+
+    @Column(name = "provider_message_id", length = 255)
+    private String providerMessageId;
+
+    @Column(name = "attempt_count", nullable = false)
+    @Builder.Default
+    private int attemptCount = 0;
+
+    @Column(name = "claimed_at")
+    private Instant claimedAt;
 }

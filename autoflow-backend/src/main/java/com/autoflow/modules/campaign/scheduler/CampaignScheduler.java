@@ -23,4 +23,13 @@ public class CampaignScheduler {
             log.error("Error executing campaign scheduler: {}", e.getMessage(), e);
         }
     }
+
+    @Scheduled(fixedDelay = 60000)
+    public void recoverStaleClaims() {
+        try {
+            campaignService.recoverStaleProcessingClaims(java.time.Duration.ofMinutes(5));
+        } catch (Exception e) {
+            log.error("Error recovering stale campaign processing claims: {}", e.getMessage(), e);
+        }
+    }
 }

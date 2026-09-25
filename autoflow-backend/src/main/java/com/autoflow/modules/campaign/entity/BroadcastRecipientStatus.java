@@ -9,5 +9,6 @@ public enum BroadcastRecipientStatus {
     SKIPPED_WINDOW,
     SKIPPED_POLICY,
     SKIPPED_OPT_OUT,
-    CANCELLED
+    CANCELLED,
+    FAILED_CRASH_RECOVERY
 }

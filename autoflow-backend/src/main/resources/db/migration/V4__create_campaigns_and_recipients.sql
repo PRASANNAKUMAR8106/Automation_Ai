@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS broadcast_recipients (
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     error_message TEXT,
     sent_at TIMESTAMPTZ,
+    idempotency_key VARCHAR(100),
+    provider_message_id VARCHAR(255),
+    attempt_count INT NOT NULL DEFAULT 0,
+    claimed_at TIMESTAMPTZ,
     version BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

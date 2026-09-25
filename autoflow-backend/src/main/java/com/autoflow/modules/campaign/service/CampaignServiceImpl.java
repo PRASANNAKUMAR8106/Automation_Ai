@@ -30,6 +30,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -251,12 +252,18 @@ public class CampaignServiceImpl implements CampaignService {
         int failed = 0;
 
         for (BroadcastRecipient recipient : pendingRecipients) {
-            // 1. Recipient-level atomic claiming: ensures concurrent workers/retries never send twice
-            int claimed = campaignRecipientRepository.claimRecipientForProcessing(recipient.getId());
+            // 1. Recipient-level atomic claiming with lease timestamp and idempotency key
+            String idempotencyKey = "camp_" + campaignId + "_" + recipient.getId();
+            Instant claimTime = Instant.now();
+            int claimed = campaignRecipientRepository.claimRecipientForProcessing(recipient.getId(), claimTime, idempotencyKey);
             if (claimed == 0) {
                 log.debug("Recipient {} already claimed/processed by another thread.", recipient.getId());
                 continue;
             }
+            recipient.setStatus(BroadcastRecipientStatus.PROCESSING);
+            recipient.setIdempotencyKey(idempotencyKey);
+            recipient.setClaimedAt(claimTime);
+            recipient.setAttemptCount(recipient.getAttemptCount() + 1);
 
             // 2. Cancellation check: if campaign was cancelled during processing, halt immediately
             Optional<BroadcastCampaignStatus> currentCampaignStatus = campaignRepository.findStatusById(campaignId);
@@ -296,9 +303,10 @@ public class CampaignServiceImpl implements CampaignService {
             // 5. Personalize template variables
             String personalizedMessage = personalize(campaign.getMessageTemplate(), contact, campaign.getChannel());
 
-            // 6. Dispatch to Channel Provider
+            // 6. Dispatch to Channel Provider with external message ID recording
             try {
-                dispatchMessage(campaign.getChannel(), token, contact.getExternalId(), personalizedMessage, campaign.getMediaUrl());
+                String providerMessageId = dispatchMessage(campaign.getChannel(), token, contact.getExternalId(), personalizedMessage, campaign.getMediaUrl());
+                recipient.setProviderMessageId(providerMessageId);
                 recipient.setStatus(BroadcastRecipientStatus.SENT);
                 recipient.setSentAt(Instant.now());
                 recipient.setErrorMessage(null);
@@ -315,7 +323,12 @@ public class CampaignServiceImpl implements CampaignService {
         // Verify campaign was not cancelled while processing
         Optional<BroadcastCampaignStatus> finalStatus = campaignRepository.findStatusById(campaignId);
         if (finalStatus.isPresent() && finalStatus.get() == BroadcastCampaignStatus.CANCELLED) {
-            log.info("Campaign {} was cancelled during execution. Preserving CANCELLED state.", campaignId);
+            log.info("Campaign {} was cancelled during execution. Preserving CANCELLED state and updating final dispatch counts.", campaignId);
+            campaign = campaignRepository.findById(campaignId).orElse(campaign);
+            campaign.setSentCount(campaign.getSentCount() + sent);
+            campaign.setDeliveredCount(campaign.getDeliveredCount() + sent);
+            campaign.setFailedCount(campaign.getFailedCount() + failed);
+            campaignRepository.save(campaign);
             return;
         }
 
@@ -453,26 +466,66 @@ public class CampaignServiceImpl implements CampaignService {
         return token;
     }
 
-    private void dispatchMessage(ChannelType channel, String token, String recipientId, String text, String mediaUrl) {
+    private String dispatchMessage(ChannelType channel, String token, String recipientId, String text, String mediaUrl) {
         if (channel == ChannelType.INSTAGRAM) {
             if (mediaUrl != null && !mediaUrl.isBlank()) {
-                instagramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                return instagramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
             } else {
-                instagramChannelProvider.sendPrivateDirectMessage(token, recipientId, text);
+                return instagramChannelProvider.sendPrivateDirectMessage(token, recipientId, text);
             }
         } else if (channel == ChannelType.WHATSAPP) {
             if (mediaUrl != null && !mediaUrl.isBlank()) {
-                whatsAppChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                return whatsAppChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
             } else {
-                whatsAppChannelProvider.sendMessage(token, recipientId, text);
+                return whatsAppChannelProvider.sendMessage(token, recipientId, text);
             }
         } else if (channel == ChannelType.TELEGRAM) {
             if (mediaUrl != null && !mediaUrl.isBlank()) {
-                telegramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                return telegramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
             } else {
-                telegramChannelProvider.sendMessage(token, recipientId, text);
+                return telegramChannelProvider.sendMessage(token, recipientId, text);
             }
         }
+        return null;
+    }
+
+    @Override
+    @Transactional
+    public int recoverStaleProcessingClaims(Duration leaseTimeout) {
+        if (leaseTimeout == null || leaseTimeout.isNegative() || leaseTimeout.isZero()) {
+            leaseTimeout = Duration.ofMinutes(5);
+        }
+        Instant staleBefore = Instant.now().minus(leaseTimeout);
+        List<BroadcastRecipient> staleRecipients = campaignRecipientRepository.findStaleProcessingRecipients(staleBefore);
+        if (staleRecipients.isEmpty()) {
+            return 0;
+        }
+
+        log.warn("Found {} stale processing broadcast recipient claims (stale before {})", staleRecipients.size(), staleBefore);
+        int recoveredCount = 0;
+
+        for (BroadcastRecipient recipient : staleRecipients) {
+            if (recipient.getProviderMessageId() != null && !recipient.getProviderMessageId().isBlank()) {
+                // Provider confirmed acceptance prior to worker crash or lease expiry
+                recipient.setStatus(BroadcastRecipientStatus.SENT);
+                if (recipient.getSentAt() == null) {
+                    recipient.setSentAt(recipient.getClaimedAt() != null ? recipient.getClaimedAt() : Instant.now());
+                }
+                recipient.setErrorMessage(null);
+                log.info("Recovered stale recipient {} as SENT with confirmed providerMessageId: {}",
+                        recipient.getId(), recipient.getProviderMessageId());
+            } else {
+                // Lease expired before provider acceptance was confirmed.
+                // Blind re-dispatch is suppressed to avoid duplicate delivery across external messaging providers.
+                recipient.setStatus(BroadcastRecipientStatus.FAILED_CRASH_RECOVERY);
+                recipient.setErrorMessage("Dispatch lease expired without provider confirmation. Automatic retry suppressed to avoid duplicate delivery.");
+                log.warn("Recovered stale recipient {} as FAILED_CRASH_RECOVERY without duplicate re-dispatch", recipient.getId());
+            }
+            campaignRecipientRepository.save(recipient);
+            recoveredCount++;
+        }
+
+        return recoveredCount;
     }
 
     private CampaignResponse toCampaignResponse(BroadcastCampaign c) {
@@ -509,6 +562,9 @@ public class CampaignServiceImpl implements CampaignService {
                 .status(r.getStatus())
                 .errorMessage(r.getErrorMessage())
                 .sentAt(r.getSentAt())
+                .idempotencyKey(r.getIdempotencyKey())
+                .providerMessageId(r.getProviderMessageId())
+                .attemptCount(r.getAttemptCount())
                 .build();
     }
 }

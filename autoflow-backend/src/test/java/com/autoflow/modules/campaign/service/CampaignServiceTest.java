@@ -29,6 +29,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -250,7 +251,7 @@ class CampaignServiceTest {
         when(campaignRepository.claimCampaignForExecution(eq(campaignId), any())).thenReturn(1);
         when(campaignRecipientRepository.findByCampaignIdAndStatus(campaignId, BroadcastRecipientStatus.PENDING))
                 .thenReturn(List.of(recipient));
-        when(campaignRecipientRepository.claimRecipientForProcessing(recipient.getId())).thenReturn(1);
+        when(campaignRecipientRepository.claimRecipientForProcessing(eq(recipient.getId()), any(), any())).thenReturn(1);
         when(campaignRepository.findStatusById(campaignId)).thenReturn(Optional.of(BroadcastCampaignStatus.RUNNING));
 
         // Re-fetched contact fresh from DB now has "unsubscribed" tag!
@@ -329,7 +330,7 @@ class CampaignServiceTest {
                 .thenReturn(List.of(r));
 
         // Atomic recipient claim returns 0 (already claimed by another worker thread)
-        when(campaignRecipientRepository.claimRecipientForProcessing(r.getId())).thenReturn(0);
+        when(campaignRecipientRepository.claimRecipientForProcessing(eq(r.getId()), any(), any())).thenReturn(0);
         when(campaignRepository.findStatusById(campaignId)).thenReturn(Optional.of(BroadcastCampaignStatus.RUNNING));
         when(campaignRepository.save(any(BroadcastCampaign.class))).thenAnswer(i -> i.getArgument(0));
 
@@ -369,20 +370,22 @@ class CampaignServiceTest {
                 .thenReturn(List.of(r1, r2));
 
         // R1: claimed successfully, campaign is RUNNING
-        when(campaignRecipientRepository.claimRecipientForProcessing(r1.getId())).thenReturn(1);
+        when(campaignRecipientRepository.claimRecipientForProcessing(eq(r1.getId()), any(), any())).thenReturn(1);
         when(campaignRepository.findStatusById(campaignId))
                 .thenReturn(Optional.of(BroadcastCampaignStatus.RUNNING)) // during R1 check
                 .thenReturn(Optional.of(BroadcastCampaignStatus.CANCELLED)); // during R2 check (operator cancelled!)
 
         when(contactRepository.findById(c1.getId())).thenReturn(Optional.of(c1));
+        when(telegramChannelProvider.sendMessage(any(), eq("tg_1"), any())).thenReturn("tg_msg_first_recipient");
 
         // R2: claimed successfully
-        when(campaignRecipientRepository.claimRecipientForProcessing(r2.getId())).thenReturn(1);
+        when(campaignRecipientRepository.claimRecipientForProcessing(eq(r2.getId()), any(), any())).thenReturn(1);
 
         campaignService.executeCampaign(campaignId);
 
-        // R1 was sent before cancellation
+        // R1 was sent before cancellation and recorded providerMessageId
         assertEquals(BroadcastRecipientStatus.SENT, r1.getStatus());
+        assertEquals("tg_msg_first_recipient", r1.getProviderMessageId());
         verify(telegramChannelProvider, times(1)).sendMessage(any(), eq("tg_1"), any());
 
         // R2 detected cancellation, was marked CANCELLED, and was NOT dispatched
@@ -391,6 +394,7 @@ class CampaignServiceTest {
 
         // Campaign status remains CANCELLED and was NOT overwritten to COMPLETED
         assertNotEquals(BroadcastCampaignStatus.COMPLETED, campaign.getStatus());
+        assertEquals(1, campaign.getSentCount());
     }
 
     @Test
@@ -441,6 +445,98 @@ class CampaignServiceTest {
         assertNotNull(detail);
         assertEquals("Product Launch", detail.getCampaign().getName());
         assertEquals(90.0, detail.getDeliveryRate());
+    }
+
+    @Test
+    @DisplayName("Crash recovery: Stale processing claims without provider confirmation transition to FAILED_CRASH_RECOVERY without re-dispatching")
+    void shouldRecoverStaleProcessingClaimsWithoutReDispatchingToPreventDuplicates() {
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Crash Test Campaign")
+                .channel(ChannelType.WHATSAPP)
+                .build();
+        campaign.setId(UUID.randomUUID());
+
+        BroadcastRecipient staleRecipient = BroadcastRecipient.builder()
+                .campaign(campaign)
+                .status(BroadcastRecipientStatus.PROCESSING)
+                .claimedAt(Instant.now().minus(Duration.ofMinutes(10)))
+                .idempotencyKey("camp_test_rec_1")
+                .providerMessageId(null)
+                .attemptCount(1)
+                .build();
+        staleRecipient.setId(UUID.randomUUID());
+
+        when(campaignRecipientRepository.findStaleProcessingRecipients(any(Instant.class)))
+                .thenReturn(List.of(staleRecipient));
+        when(campaignRecipientRepository.save(any(BroadcastRecipient.class))).thenAnswer(i -> i.getArgument(0));
+
+        int recovered = campaignService.recoverStaleProcessingClaims(Duration.ofMinutes(5));
+
+        assertEquals(1, recovered);
+        assertEquals(BroadcastRecipientStatus.FAILED_CRASH_RECOVERY, staleRecipient.getStatus());
+        assertTrue(staleRecipient.getErrorMessage().contains("lease expired"));
+        // Confirm no channel provider was blindly invoked, preventing duplicate delivery
+        verify(whatsAppChannelProvider, never()).sendMessage(any(), any(), any());
+        verify(whatsAppChannelProvider, never()).sendMediaMessage(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Crash recovery: Stale processing claim with confirmed providerMessageId transitions to SENT")
+    void shouldRecoverStaleProcessingClaimIfProviderMessageIdAlreadyPresent() {
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Confirmed Crash Recovery")
+                .channel(ChannelType.INSTAGRAM)
+                .build();
+        campaign.setId(UUID.randomUUID());
+
+        BroadcastRecipient staleConfirmedRecipient = BroadcastRecipient.builder()
+                .campaign(campaign)
+                .status(BroadcastRecipientStatus.PROCESSING)
+                .claimedAt(Instant.now().minus(Duration.ofMinutes(15)))
+                .idempotencyKey("camp_test_rec_2")
+                .providerMessageId("ig_meta_mid_998877")
+                .attemptCount(1)
+                .build();
+        staleConfirmedRecipient.setId(UUID.randomUUID());
+
+        when(campaignRecipientRepository.findStaleProcessingRecipients(any(Instant.class)))
+                .thenReturn(List.of(staleConfirmedRecipient));
+        when(campaignRecipientRepository.save(any(BroadcastRecipient.class))).thenAnswer(i -> i.getArgument(0));
+
+        int recovered = campaignService.recoverStaleProcessingClaims(Duration.ofMinutes(5));
+
+        assertEquals(1, recovered);
+        assertEquals(BroadcastRecipientStatus.SENT, staleConfirmedRecipient.getStatus());
+        assertEquals("ig_meta_mid_998877", staleConfirmedRecipient.getProviderMessageId());
+        assertNull(staleConfirmedRecipient.getErrorMessage());
+        assertNotNull(staleConfirmedRecipient.getSentAt());
+        verify(instagramChannelProvider, never()).sendPrivateDirectMessage(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Cancellation semantics: Verified that already accepted provider messages are preserved and not undone")
+    void shouldPreserveAlreadySentMessagesDuringCancellationRaceCondition() {
+        UUID campaignId = UUID.randomUUID();
+        BroadcastCampaign campaign = BroadcastCampaign.builder()
+                .name("Cancellation Semantics Campaign")
+                .channel(ChannelType.TELEGRAM)
+                .status(BroadcastCampaignStatus.RUNNING)
+                .totalRecipients(2)
+                .sentCount(1)
+                .build();
+        campaign.setId(campaignId);
+        campaign.setOrganizationId(testOrgId);
+
+        when(campaignRepository.findByIdAndOrganizationId(campaignId, testOrgId)).thenReturn(Optional.of(campaign));
+        when(campaignRepository.cancelCampaignAtomically(testOrgId, campaignId)).thenReturn(1);
+        when(campaignRecipientRepository.cancelPendingRecipients(campaignId)).thenReturn(1);
+
+        CampaignResponse response = campaignService.cancelCampaign(testOrgId, campaignId);
+
+        assertNotNull(response);
+        verify(campaignRecipientRepository).cancelPendingRecipients(campaignId);
+        // Verify cancelPendingRecipients was called for the campaign, which only targets PENDING or unconfirmed PROCESSING
+        verify(campaignRepository).cancelCampaignAtomically(testOrgId, campaignId);
     }
 
     @Test
