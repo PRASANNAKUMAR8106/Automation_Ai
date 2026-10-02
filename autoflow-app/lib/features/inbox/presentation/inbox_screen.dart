@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../contacts_crm/data/crm_repository.dart';
+import '../../knowledge/presentation/knowledge_base_dialog.dart';
 
 class InboxScreen extends ConsumerStatefulWidget {
   const InboxScreen({super.key});
@@ -14,6 +15,8 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
   int _selectedChatIndex = 0;
   final TextEditingController _replyController = TextEditingController();
   bool _useHumanAgentTag = false;
+  AiSuggestionModel? _aiSuggestion;
+  bool _isLoadingAiSuggestion = false;
 
   final List<Map<String, dynamic>> _threads = [
     {
@@ -88,6 +91,30 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
     super.dispose();
   }
 
+  Future<void> _fetchAiSuggestion() async {
+    final activeThread = _threads[_selectedChatIndex];
+    final convoId = activeThread['id'] as String? ?? 'conv-1';
+    setState(() {
+      _isLoadingAiSuggestion = true;
+    });
+
+    try {
+      final suggestion = await ref.read(crmRepositoryProvider).getAiSuggestion(convoId);
+      if (mounted) {
+        setState(() {
+          _aiSuggestion = suggestion;
+          _isLoadingAiSuggestion = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isLoadingAiSuggestion = false;
+        });
+      }
+    }
+  }
+
   void _sendReply() {
     final text = _replyController.text.trim();
     if (text.isEmpty) return;
@@ -131,6 +158,7 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
       });
       activeThread['lastMessage'] = text;
       _replyController.clear();
+      _aiSuggestion = null;
     });
   }
 
@@ -283,6 +311,7 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                           onTap: () => setState(() {
                             _selectedChatIndex = index;
                             _useHumanAgentTag = false;
+                            _aiSuggestion = null;
                           }),
                         );
                       },
@@ -353,7 +382,14 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                       ),
                       const SizedBox(width: 12),
                       _buildComplianceBadge(activeThread),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        key: const Key('knowledge_base_button'),
+                        onPressed: () => KnowledgeBaseDialog.show(context),
+                        icon: const Icon(Icons.menu_book_outlined, size: 20, color: AppTheme.primaryLight),
+                        tooltip: 'Knowledge Base (RAG)',
+                      ),
+                      const SizedBox(width: 8),
                       OutlinedButton.icon(
                         key: const Key('resolve_button'),
                         onPressed: () async {
@@ -433,11 +469,31 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (activeThread['channel'] == 'INSTAGRAM')
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Row(
-                            children: [
+                      // AI Co-Pilot & Channel Controls Toolbar
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            ElevatedButton.icon(
+                              key: const Key('ai_copilot_suggest_button'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF8B5CF6),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                              onPressed: _isLoadingAiSuggestion ? null : _fetchAiSuggestion,
+                              icon: _isLoadingAiSuggestion
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                    )
+                                  : const Icon(Icons.auto_awesome, size: 14),
+                              label: Text(_isLoadingAiSuggestion ? 'Synthesizing...' : '✨ AI Co-Pilot Suggest'),
+                            ),
+                            if (activeThread['channel'] == 'INSTAGRAM') ...[
+                              const SizedBox(width: 16),
                               Checkbox(
                                 key: const Key('human_agent_tag_checkbox'),
                                 value: _useHumanAgentTag,
@@ -450,6 +506,134 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                                   style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
                                   overflow: TextOverflow.ellipsis,
                                 ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+
+                      if (_aiSuggestion != null)
+                        Container(
+                          key: const Key('ai_suggestion_card'),
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E1B4B).withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFF8B5CF6).withValues(alpha: 0.5)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.auto_awesome, size: 16, color: Color(0xFFA78BFA)),
+                                      const SizedBox(width: 6),
+                                      const Text(
+                                        'AI Co-Pilot Suggestion',
+                                        style: TextStyle(color: Color(0xFFA78BFA), fontSize: 12, fontWeight: FontWeight.bold),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green.withValues(alpha: 0.2),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          '${(_aiSuggestion!.confidenceScore * 100).toInt()}% Match',
+                                          style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.close, size: 14, color: AppTheme.textMuted),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(),
+                                    onPressed: () => setState(() => _aiSuggestion = null),
+                                  ),
+                                ],
+                              ),
+                              if (_aiSuggestion!.requiresHumanHandoff) ...[
+                                const SizedBox(height: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.amber.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.warning_amber_rounded, size: 14, color: Colors.amberAccent),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          'Human Review Recommended: ${_aiSuggestion!.humanHandoffReason ?? "Escalation signal detected."}',
+                                          style: const TextStyle(color: Colors.amberAccent, fontSize: 11),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 6),
+                              Text(
+                                _aiSuggestion!.suggestedReply,
+                                style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.3),
+                              ),
+                              if (_aiSuggestion!.sourceArticleTitles.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  children: _aiSuggestion!.sourceArticleTitles.map((title) {
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(alpha: 0.08),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.menu_book, size: 10, color: Colors.lightBlueAccent),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            title,
+                                            style: const TextStyle(color: Colors.lightBlueAccent, fontSize: 10),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  TextButton.icon(
+                                    key: const Key('insert_suggestion_button'),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: const Color(0xFFA78BFA),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                    ),
+                                    onPressed: () {
+                                      setState(() {
+                                        _replyController.text = _aiSuggestion!.suggestedReply;
+                                        _aiSuggestion = null;
+                                      });
+                                    },
+                                    icon: const Icon(Icons.input_rounded, size: 14),
+                                    label: const Text('Insert into Reply'),
+                                  ),
+                                ],
                               ),
                             ],
                           ),

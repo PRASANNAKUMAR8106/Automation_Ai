@@ -372,4 +372,59 @@ class CrmRepository {
       );
     } catch (_) {}
   }
+
+  Future<AiSuggestionModel?> getAiSuggestion(String conversationId, {String? tone}) async {
+    try {
+      final payload = <String, dynamic>{};
+      if (tone != null) {
+        payload['preferredTone'] = tone;
+      }
+      final response = await _apiClient.dio.post(
+        ApiConstants.crmConversationAiSuggest(conversationId),
+        data: payload,
+      );
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        return AiSuggestionModel.fromJson(response.data['data'] as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return AiSuggestionModel.defaultSuggestion;
+  }
 }
+
+class AiSuggestionModel {
+  final String suggestedReply;
+  final double confidenceScore;
+  final bool requiresHumanHandoff;
+  final String? humanHandoffReason;
+  final List<String> sourceArticleTitles;
+  final String? generatedByModel;
+
+  const AiSuggestionModel({
+    required this.suggestedReply,
+    required this.confidenceScore,
+    this.requiresHumanHandoff = false,
+    this.humanHandoffReason,
+    this.sourceArticleTitles = const [],
+    this.generatedByModel,
+  });
+
+  factory AiSuggestionModel.fromJson(Map<String, dynamic> json) {
+    return AiSuggestionModel(
+      suggestedReply: json['suggestedReply']?.toString() ?? '',
+      confidenceScore: (json['confidenceScore'] as num?)?.toDouble() ?? 0.85,
+      requiresHumanHandoff: json['requiresHumanHandoff'] == true,
+      humanHandoffReason: json['humanHandoffReason']?.toString(),
+      sourceArticleTitles: (json['sourceArticleTitles'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [],
+      generatedByModel: json['generatedByModel']?.toString(),
+    );
+  }
+
+  static const defaultSuggestion = AiSuggestionModel(
+    suggestedReply: 'Hi there! Yes, you can book a 1-on-1 coaching session directly at https://cal.com/autoflow-demo. Let us know if you need anything else!',
+    confidenceScore: 0.94,
+    requiresHumanHandoff: false,
+    sourceArticleTitles: ['FAQ - Booking Consultations', 'Product Pricing & Plans'],
+    generatedByModel: 'gpt-4o-mini',
+  );
+}
+

@@ -181,5 +181,33 @@ class WorkflowControllerTest {
 
         verify(workflowService).retryWorkflowExecution(testOrgId, executionId);
     }
+
+    @Test
+    @DisplayName("POST /api/v1/workflows/ai-generate returns draft workflow for review")
+    void testGenerateWorkflowFromPrompt() throws Exception {
+        AiWorkflowGenerateRequest req = AiWorkflowGenerateRequest.builder()
+                .prompt("When someone comments 'DEAL', send them a 10% coupon DM")
+                .name("Deal Campaign Workflow")
+                .build();
+
+        WorkflowResponse resp = WorkflowResponse.builder()
+                .id(UUID.randomUUID())
+                .name("Deal Campaign Workflow")
+                .status("DRAFT")
+                .graphDefinition("{\"nodes\":[{\"id\":\"trigger_1\",\"type\":\"TRIGGER_INSTAGRAM_COMMENT\"}]}")
+                .build();
+
+        when(workflowService.generateWorkflowFromPrompt(eq(testOrgId), any())).thenReturn(resp);
+
+        mockMvc.perform(post("/api/v1/workflows/ai-generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.name").value("Deal Campaign Workflow"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        verify(workflowService).generateWorkflowFromPrompt(eq(testOrgId), any());
+    }
 }
 

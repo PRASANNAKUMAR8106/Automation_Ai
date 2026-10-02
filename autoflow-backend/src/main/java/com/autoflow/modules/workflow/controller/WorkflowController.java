@@ -34,6 +34,16 @@ public class WorkflowController {
         return ResponseEntity.ok(ApiResponse.ok("Workflow created successfully", response));
     }
 
+    @PostMapping("/ai-generate")
+    @Operation(summary = "AI-Assisted Workflow Generation", description = "Drafts an Instagram/social workflow DAG from natural language prompt for user review")
+    public ResponseEntity<ApiResponse<WorkflowResponse>> generateWorkflowFromPrompt(
+            @Valid @RequestBody AiWorkflowGenerateRequest request
+    ) {
+        UUID orgId = TenantContext.getRequiredTenantId();
+        WorkflowResponse response = workflowService.generateWorkflowFromPrompt(orgId, request);
+        return ResponseEntity.ok(ApiResponse.ok("AI draft workflow generated successfully for review", response));
+    }
+
     @GetMapping
     @Operation(summary = "List Workflows", description = "Returns all automation workflows for the tenant organization")
     public ResponseEntity<ApiResponse<List<WorkflowResponse>>> listWorkflows() {

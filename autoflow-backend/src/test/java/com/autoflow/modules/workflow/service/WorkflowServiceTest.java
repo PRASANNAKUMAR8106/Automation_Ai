@@ -2,6 +2,7 @@ package com.autoflow.modules.workflow.service;
 
 import com.autoflow.common.exceptions.QuotaExceededException;
 import com.autoflow.modules.billing.service.EntitlementService;
+import com.autoflow.modules.workflow.dto.AiWorkflowGenerateRequest;
 import com.autoflow.modules.workflow.dto.CreateWorkflowRequest;
 import com.autoflow.modules.workflow.dto.SaveWorkflowVersionRequest;
 import com.autoflow.modules.workflow.dto.WorkflowResponse;
@@ -54,6 +55,9 @@ class WorkflowServiceTest {
     @Mock
     private WorkflowExecutionEngine workflowExecutionEngine;
 
+    @Mock
+    private com.autoflow.modules.ai.service.AiRouterService aiRouterService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private WorkflowServiceImpl workflowService;
 
@@ -67,7 +71,8 @@ class WorkflowServiceTest {
                 automationExecutionRepository,
                 entitlementService,
                 workflowExecutionEngine,
-                objectMapper
+                objectMapper,
+                aiRouterService
         );
     }
 
@@ -327,6 +332,60 @@ class WorkflowServiceTest {
         assertThrows(ResourceNotFoundException.class, () ->
                 workflowService.retryWorkflowExecution(testOrgId, executionId));
         verify(workflowExecutionEngine, never()).reDispatchExecution(any());
+    }
+
+    @Test
+    @DisplayName("Should generate draft workflow from AI prompt without forcing lead collection")
+    void shouldGenerateDraftWorkflowFromAiPromptWithoutForcingLeadCollection() {
+        AiWorkflowGenerateRequest req = AiWorkflowGenerateRequest.builder()
+                .prompt("When someone comments 'PRICE' on my Reel, send them a DM with the link")
+                .name("Price Info Bot")
+                .build();
+
+        when(workflowRepository.save(any(Workflow.class))).thenAnswer(i -> {
+            Workflow w = i.getArgument(0);
+            w.setId(UUID.randomUUID());
+            return w;
+        });
+
+        when(aiRouterService.generateReply(any(), any())).thenReturn("""
+                {
+                  "nodes": [
+                    {
+                      "id": "trigger_1",
+                      "type": "TRIGGER_INSTAGRAM_COMMENT",
+                      "config": {
+                        "keywords": ["PRICE"],
+                        "match_type": "CONTAINS"
+                      }
+                    },
+                    {
+                      "id": "action_1",
+                      "type": "ACTION_SEND_DM",
+                      "config": {
+                        "message": "Here is the pricing: https://example.com/pricing"
+                      }
+                    }
+                  ],
+                  "edges": [
+                    {
+                      "from": "trigger_1",
+                      "to": "action_1"
+                    }
+                  ]
+                }
+                """);
+
+        WorkflowResponse response = workflowService.generateWorkflowFromPrompt(testOrgId, req);
+
+        assertNotNull(response);
+        assertEquals("Price Info Bot", response.getName());
+        assertEquals("DRAFT", response.getStatus());
+        assertNotNull(response.getGraphDefinition());
+        assertTrue(response.getGraphDefinition().contains("TRIGGER_INSTAGRAM_COMMENT"));
+        assertTrue(response.getGraphDefinition().contains("ACTION_SEND_DM"));
+        assertFalse(response.getGraphDefinition().contains("FORCE_EMAIL_COLLECTION"));
+        verify(entitlementService, atLeastOnce()).assertCanCreateWorkflow(testOrgId);
     }
 }
 

@@ -22,6 +22,7 @@ class ApiConstants {
 
   // Workflows
   static const String workflows = '/api/v1/workflows';
+  static const String workflowAiGenerate = '/api/v1/workflows/ai-generate';
   static String workflow(String id) => '/api/v1/workflows/$id';
   static String workflowVersions(String id) => '/api/v1/workflows/$id/versions';
   static String publishWorkflow(String id) => '/api/v1/workflows/$id/publish';
@@ -46,6 +47,11 @@ class ApiConstants {
   static String crmConversationWindowStatus(String id) => '/api/v1/crm/conversations/$id/window-status';
   static String crmConversationTyping(String id) => '/api/v1/crm/conversations/$id/typing';
   static String crmConversationResolve(String id) => '/api/v1/crm/conversations/$id/resolve';
+  static String crmConversationAiSuggest(String id) => '/api/v1/crm/conversations/$id/ai-suggest';
+
+  // Knowledge Base (RAG)
+  static const String knowledgeArticles = '/api/v1/knowledge/articles';
+  static String knowledgeArticle(String id) => '/api/v1/knowledge/articles/$id';
 
   // Campaigns & Broadcasts
   static const String campaigns = '/api/v1/campaigns';

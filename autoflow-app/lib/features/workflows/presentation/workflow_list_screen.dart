@@ -132,6 +132,16 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
                       label: const Text('Starter Templates'),
                     ),
                     ElevatedButton.icon(
+                      key: const Key('ai_generate_workflow_button'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF8B5CF6),
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: () => _showAiWorkflowDialog(context),
+                      icon: const Icon(Icons.auto_awesome, size: 18),
+                      label: const Text('Generate with AI'),
+                    ),
+                    ElevatedButton.icon(
                       onPressed: () {
                         context.push('/workflows/builder');
                       },
@@ -351,6 +361,120 @@ class _WorkflowListScreenState extends ConsumerState<WorkflowListScreen> with Si
                 );
                 },
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAiWorkflowDialog(BuildContext context) {
+    final promptController = TextEditingController();
+    final nameController = TextEditingController();
+    bool isGenerating = false;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.cardDark,
+          title: const Row(
+            children: [
+              Icon(Icons.auto_awesome, color: Color(0xFFA78BFA), size: 22),
+              SizedBox(width: 8),
+              Text('AI Workflow Generator', style: TextStyle(color: Colors.white, fontSize: 18)),
+            ],
+          ),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Describe your automation goal. AutoFlow synthesizes an Instagram / Social Media DAG workflow saved in DRAFT status for review before publishing. (Lead collection is never forced).',
+                    style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    key: const Key('ai_workflow_name_input'),
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Workflow Name (Optional)',
+                      hintText: 'e.g. Reel Comment PRICE -> Deliver Offer',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('ai_workflow_prompt_input'),
+                    controller: promptController,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Automation Description',
+                      hintText: 'When someone comments "OFFER" on my post, send them a public reply and DM them the link https://example.com/promo',
+                    ),
+                  ),
+                  if (isGenerating) ...[
+                    const SizedBox(height: 16),
+                    const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFA78BFA)),
+                        ),
+                        SizedBox(width: 10),
+                        Text('Synthesizing DAG automation nodes...', style: TextStyle(color: Color(0xFFA78BFA), fontSize: 12)),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isGenerating ? null : () => Navigator.of(dialogCtx).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              key: const Key('submit_ai_generate_workflow'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: isGenerating
+                  ? null
+                  : () async {
+                      final prompt = promptController.text.trim();
+                      if (prompt.isEmpty) return;
+
+                      setDialogState(() => isGenerating = true);
+
+                      final navigator = Navigator.of(dialogCtx);
+                      final messenger = ScaffoldMessenger.of(context);
+
+                      final result = await ref.read(workflowRepositoryProvider).generateWorkflowWithAi(
+                            prompt,
+                            name: nameController.text.trim().isNotEmpty ? nameController.text.trim() : null,
+                          );
+
+                      navigator.pop();
+                      if (mounted) {
+                        ref.invalidate(workflowListProvider);
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(result != null
+                                ? 'AI generated draft workflow "${result.name}" successfully!'
+                                : 'Created draft workflow from prompt.'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      }
+                    },
+              child: const Text('Generate Draft'),
             ),
           ],
         ),

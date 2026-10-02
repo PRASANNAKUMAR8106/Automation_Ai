@@ -24,4 +24,6 @@ public interface WorkflowService {
     List<WorkflowExecutionResponse> getWorkflowExecutions(UUID organizationId, UUID workflowId);
 
     WorkflowExecutionResponse retryWorkflowExecution(UUID organizationId, UUID executionId);
+
+    WorkflowResponse generateWorkflowFromPrompt(UUID organizationId, AiWorkflowGenerateRequest request);
 }

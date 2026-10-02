@@ -35,6 +35,7 @@ public class WorkflowServiceImpl implements WorkflowService {
     private final EntitlementService entitlementService;
     private final WorkflowExecutionEngine workflowExecutionEngine;
     private final ObjectMapper objectMapper;
+    private final com.autoflow.modules.ai.service.AiRouterService aiRouterService;
 
     @Override
     @Transactional
@@ -253,6 +254,122 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         log.info("Queued and re-dispatched execution {} for retry (attempt #{}) under org {}", executionId, updated.getRetryCount(), organizationId);
         return WorkflowExecutionResponse.fromEntity(updated);
+    }
+
+    @Override
+    @Transactional
+    public WorkflowResponse generateWorkflowFromPrompt(UUID organizationId, AiWorkflowGenerateRequest request) {
+        entitlementService.assertCanCreateWorkflow(organizationId);
+
+        String prompt = request.getPrompt().trim();
+        String name = (request.getName() != null && !request.getName().isBlank())
+                ? request.getName().trim()
+                : "AI Draft: " + (prompt.length() > 30 ? prompt.substring(0, 30) + "..." : prompt);
+
+        String systemInstruction = """
+                You are an expert Social Media Workflow Automation Architect.
+                Generate a valid, minimal, acyclic DAG JSON structure for social automation.
+                Output ONLY a JSON object matching this schema:
+                {
+                  "nodes": [
+                    {
+                      "id": "trigger_1",
+                      "type": "TRIGGER_INSTAGRAM_COMMENT",
+                      "config": {
+                        "keywords": ["..."],
+                        "match_type": "CONTAINS"
+                      }
+                    },
+                    {
+                      "id": "action_1",
+                      "type": "ACTION_SEND_DM",
+                      "config": {
+                        "message": "..."
+                      }
+                    }
+                  ],
+                  "edges": [
+                    {
+                      "from": "trigger_1",
+                      "to": "action_1"
+                    }
+                  ]
+                }
+                CRITICAL RULES:
+                1. Never force email collection or phone collection unless explicitly requested in the prompt.
+                2. Supported triggers: TRIGGER_INSTAGRAM_COMMENT, TRIGGER_INSTAGRAM_DM, TRIGGER_KEYWORD, TRIGGER_STORY_MENTION.
+                3. Supported actions: ACTION_SEND_DM, ACTION_PUBLIC_COMMENT_REPLY, ACTION_GENERATE_AI_MEDIA.
+                4. Output MUST be strictly valid JSON without markdown fences.
+                """;
+
+        String graphJson = null;
+        try {
+            String aiResponse = (aiRouterService != null) ? aiRouterService.generateReply(systemInstruction, prompt) : null;
+            if (aiResponse != null) {
+                if (aiResponse.contains("```json")) {
+                    aiResponse = aiResponse.substring(aiResponse.indexOf("```json") + 7);
+                    if (aiResponse.contains("```")) {
+                        aiResponse = aiResponse.substring(0, aiResponse.indexOf("```"));
+                    }
+                } else if (aiResponse.contains("```")) {
+                    aiResponse = aiResponse.substring(aiResponse.indexOf("```") + 3);
+                    if (aiResponse.contains("```")) {
+                        aiResponse = aiResponse.substring(0, aiResponse.indexOf("```"));
+                    }
+                }
+                aiResponse = aiResponse.trim();
+                DagModel dag = DagModel.fromJson(aiResponse, objectMapper);
+                dag.validate();
+                graphJson = objectMapper.writeValueAsString(dag);
+            }
+        } catch (Exception e) {
+            log.warn("AI generation parsing failed ({}), falling back to structured template generation for prompt: {}",
+                    e.getMessage(), prompt);
+        }
+
+        if (graphJson == null || graphJson.isBlank()) {
+            graphJson = buildFallbackDag(prompt);
+        }
+
+        // Save strictly in DRAFT status for influencer/user review before publishing
+        CreateWorkflowRequest createReq = CreateWorkflowRequest.builder()
+                .name(name)
+                .description("Generated from AI prompt: " + prompt)
+                .initialGraphDefinition(graphJson)
+                .build();
+
+        return createWorkflow(organizationId, createReq);
+    }
+
+    private String buildFallbackDag(String prompt) {
+        String keyword = "INFO";
+        var matcher = java.util.regex.Pattern.compile("['\"]([a-zA-Z0-9_-]+)['\"]").matcher(prompt);
+        if (matcher.find()) {
+            keyword = matcher.group(1).toUpperCase();
+        }
+
+        DagModel dag = DagModel.builder()
+                .nodes(List.of(
+                        DagModel.DagNode.builder()
+                                .id("trigger_1")
+                                .type("TRIGGER_INSTAGRAM_COMMENT")
+                                .config(Map.of("keywords", List.of(keyword), "match_type", "CONTAINS"))
+                                .build(),
+                        DagModel.DagNode.builder()
+                                .id("action_1")
+                                .type("ACTION_SEND_DM")
+                                .config(Map.of("message", "Thanks for commenting! Here is the link and info you requested."))
+                                .build()
+                ))
+                .edges(List.of(
+                        DagModel.DagEdge.builder().from("trigger_1").to("action_1").build()
+                ))
+                .build();
+        try {
+            return objectMapper.writeValueAsString(dag);
+        } catch (Exception ex) {
+            return "{\"nodes\":[],\"edges\":[]}";
+        }
     }
 
     private Workflow findOrgWorkflow(UUID organizationId, UUID workflowId) {

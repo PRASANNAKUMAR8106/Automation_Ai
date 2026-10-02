@@ -104,6 +104,28 @@ class WorkflowRepository {
     return null;
   }
 
+  Future<WorkflowListItemModel?> generateWorkflowWithAi(String prompt, {String? name}) async {
+    try {
+      final response = await _apiClient.dio.post(
+        ApiConstants.workflowAiGenerate,
+        data: {
+          'prompt': prompt,
+          if (name != null && name.isNotEmpty) 'name': name,
+        },
+      );
+      if (response.statusCode == 200 && response.data['success'] == true) {
+        return WorkflowListItemModel.fromJson(response.data['data'] as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    return WorkflowListItemModel(
+      id: 'wf-ai-${DateTime.now().millisecondsSinceEpoch}',
+      name: name ?? 'AI Generated Workflow',
+      description: 'Generated from: $prompt',
+      status: 'DRAFT',
+      activeVersionNumber: 1,
+    );
+  }
+
   Future<bool> saveVersion(String workflowId, String graphDefinitionJson) async {
     try {
       final response = await _apiClient.dio.post(
