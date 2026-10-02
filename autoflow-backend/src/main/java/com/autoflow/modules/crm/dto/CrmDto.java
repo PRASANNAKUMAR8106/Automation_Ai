@@ -58,6 +58,13 @@ public class CrmDto {
         private Long windowRemainingSeconds;
         private String lastMessageSnippet;
         private int unreadCount;
+        private String priority;
+        private String sentiment;
+        private String assignedUserEmail;
+        private Instant slaFirstResponseDueAt;
+        private Instant slaResolutionDueAt;
+        private boolean slaFirstResponseBreached;
+        private boolean slaResolutionBreached;
     }
 
     @Data

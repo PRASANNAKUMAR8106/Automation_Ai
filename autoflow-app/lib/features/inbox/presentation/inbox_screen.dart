@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../contacts_crm/data/crm_repository.dart';
+import '../../contacts_crm/presentation/performance_telemetry_dialog.dart';
 import '../../knowledge/presentation/knowledge_base_dialog.dart';
 
 class InboxScreen extends ConsumerStatefulWidget {
@@ -30,6 +31,8 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
       'isResolved': false,
       'windowStatus': 'ACTIVE_24H',
       'remainingSeconds': 79200,
+      'priority': 'NORMAL',
+      'sentiment': 'POSITIVE',
       'messages': [
         {'sender': 'contact', 'text': 'GUIDE', 'time': '10:14 AM'},
         {'sender': 'bot', 'text': 'Hey Sneha! Here is the PDF you requested 🎁', 'time': '10:14 AM'},
@@ -47,6 +50,8 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
       'isResolved': false,
       'windowStatus': 'ACTIVE_24H',
       'remainingSeconds': 43200,
+      'priority': 'HIGH',
+      'sentiment': 'NEUTRAL',
       'messages': [
         {'sender': 'contact', 'text': 'DEMO', 'time': '09:45 AM'},
         {'sender': 'bot', 'text': 'Welcome to AutoFlow! How can we help your business today?', 'time': '09:45 AM'},
@@ -64,6 +69,8 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
       'isResolved': false,
       'windowStatus': 'HUMAN_AGENT_EXTENDED_7D',
       'remainingSeconds': 432000,
+      'priority': 'NORMAL',
+      'sentiment': 'NEUTRAL',
       'messages': [
         {'sender': 'contact', 'text': 'Does the discount code expire today?', 'time': '08:30 AM'},
       ]
@@ -79,6 +86,8 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
       'isResolved': true,
       'windowStatus': 'EXPIRED',
       'remainingSeconds': 0,
+      'priority': 'NORMAL',
+      'sentiment': 'NEUTRAL',
       'messages': [
         {'sender': 'contact', 'text': 'Need help with setup from last week', 'time': '8d ago'},
       ]
@@ -388,6 +397,16 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                         onPressed: () => KnowledgeBaseDialog.show(context),
                         icon: const Icon(Icons.menu_book_outlined, size: 20, color: AppTheme.primaryLight),
                         tooltip: 'Knowledge Base (RAG)',
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        key: const Key('performance_telemetry_button'),
+                        onPressed: () => showDialog(
+                          context: context,
+                          builder: (_) => const PerformanceTelemetryDialog(),
+                        ),
+                        icon: const Icon(Icons.insights_rounded, size: 20, color: Colors.cyanAccent),
+                        tooltip: 'SLA & Performance Telemetry',
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(

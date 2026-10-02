@@ -141,6 +141,13 @@ class ConversationModel {
   final bool isResolved;
   final String windowStatus;
   final int windowRemainingSeconds;
+  final String priority;
+  final String sentiment;
+  final String? assignedUserEmail;
+  final DateTime? slaFirstResponseDueAt;
+  final DateTime? slaResolutionDueAt;
+  final bool slaFirstResponseBreached;
+  final bool slaResolutionBreached;
   final List<Map<String, dynamic>> messages;
 
   const ConversationModel({
@@ -154,6 +161,13 @@ class ConversationModel {
     this.isResolved = false,
     this.windowStatus = 'ACTIVE_24H',
     this.windowRemainingSeconds = 86400,
+    this.priority = 'NORMAL',
+    this.sentiment = 'NEUTRAL',
+    this.assignedUserEmail,
+    this.slaFirstResponseDueAt,
+    this.slaResolutionDueAt,
+    this.slaFirstResponseBreached = false,
+    this.slaResolutionBreached = false,
     required this.messages,
   });
 
@@ -291,6 +305,17 @@ class CrmRepository {
               isResolved: json['resolved'] == true || json['isResolved'] == true,
               windowStatus: json['windowStatus']?.toString() ?? 'ACTIVE_24H',
               windowRemainingSeconds: (json['windowRemainingSeconds'] as num?)?.toInt() ?? 86400,
+              priority: json['priority']?.toString() ?? 'NORMAL',
+              sentiment: json['sentiment']?.toString() ?? 'NEUTRAL',
+              assignedUserEmail: json['assignedUserEmail']?.toString(),
+              slaFirstResponseDueAt: json['slaFirstResponseDueAt'] != null
+                  ? DateTime.tryParse(json['slaFirstResponseDueAt'].toString())
+                  : null,
+              slaResolutionDueAt: json['slaResolutionDueAt'] != null
+                  ? DateTime.tryParse(json['slaResolutionDueAt'].toString())
+                  : null,
+              slaFirstResponseBreached: json['slaFirstResponseBreached'] as bool? ?? false,
+              slaResolutionBreached: json['slaResolutionBreached'] as bool? ?? false,
               messages: [],
             );
           }).toList();

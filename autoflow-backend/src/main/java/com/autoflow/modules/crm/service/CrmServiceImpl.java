@@ -21,7 +21,6 @@ import java.util.*;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class CrmServiceImpl implements CrmService {
 
     private final ContactRepository contactRepository;
@@ -34,6 +33,60 @@ public class CrmServiceImpl implements CrmService {
     private final com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider telegramChannelProvider;
     private final MessagingWindowService messagingWindowService;
     private final LiveChatStreamService liveChatStreamService;
+    private final SentimentAnalysisService sentimentAnalysisService;
+    private final ConversationRoutingService conversationRoutingService;
+    private final SlaMonitoringService slaMonitoringService;
+    private final CsatService csatService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CrmServiceImpl(
+            ContactRepository contactRepository,
+            ConversationRepository conversationRepository,
+            MessageRepository messageRepository,
+            ConnectedAccountRepository connectedAccountRepository,
+            TokenEncryptionService tokenEncryptionService,
+            InstagramChannelProvider instagramChannelProvider,
+            WhatsAppChannelProvider whatsAppChannelProvider,
+            com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider telegramChannelProvider,
+            MessagingWindowService messagingWindowService,
+            LiveChatStreamService liveChatStreamService,
+            SentimentAnalysisService sentimentAnalysisService,
+            ConversationRoutingService conversationRoutingService,
+            SlaMonitoringService slaMonitoringService,
+            CsatService csatService
+    ) {
+        this.contactRepository = contactRepository;
+        this.conversationRepository = conversationRepository;
+        this.messageRepository = messageRepository;
+        this.connectedAccountRepository = connectedAccountRepository;
+        this.tokenEncryptionService = tokenEncryptionService;
+        this.instagramChannelProvider = instagramChannelProvider;
+        this.whatsAppChannelProvider = whatsAppChannelProvider;
+        this.telegramChannelProvider = telegramChannelProvider;
+        this.messagingWindowService = messagingWindowService;
+        this.liveChatStreamService = liveChatStreamService;
+        this.sentimentAnalysisService = sentimentAnalysisService;
+        this.conversationRoutingService = conversationRoutingService;
+        this.slaMonitoringService = slaMonitoringService;
+        this.csatService = csatService;
+    }
+
+    public CrmServiceImpl(
+            ContactRepository contactRepository,
+            ConversationRepository conversationRepository,
+            MessageRepository messageRepository,
+            ConnectedAccountRepository connectedAccountRepository,
+            TokenEncryptionService tokenEncryptionService,
+            InstagramChannelProvider instagramChannelProvider,
+            WhatsAppChannelProvider whatsAppChannelProvider,
+            com.autoflow.modules.channel.provider.telegram.TelegramChannelProvider telegramChannelProvider,
+            MessagingWindowService messagingWindowService,
+            LiveChatStreamService liveChatStreamService
+    ) {
+        this(contactRepository, conversationRepository, messageRepository, connectedAccountRepository,
+                tokenEncryptionService, instagramChannelProvider, whatsAppChannelProvider, telegramChannelProvider,
+                messagingWindowService, liveChatStreamService, null, null, null, null);
+    }
 
     @Override
     @Transactional
@@ -71,6 +124,12 @@ public class CrmServiceImpl implements CrmService {
                             .channel(contact.getChannel())
                             .lastMessageAt(Instant.now())
                             .build();
+                    if (slaMonitoringService != null) {
+                        slaMonitoringService.applySlaPolicy(convo);
+                    }
+                    if (conversationRoutingService != null) {
+                        conversationRoutingService.assignConversation(convo, RoutingPolicy.LEAST_BUSY);
+                    }
                     return conversationRepository.save(convo);
                 });
     }
@@ -98,6 +157,15 @@ public class CrmServiceImpl implements CrmService {
         conversation.setLastMessageAt(now);
         if ("INBOUND".equalsIgnoreCase(direction) && "CONTACT".equalsIgnoreCase(senderType)) {
             conversation.setLastCustomerMessageAt(now);
+
+            // Automated Conversation Intelligence & Sentiment Scoring
+            if (sentimentAnalysisService != null) {
+                sentimentAnalysisService.processInboundIntelligence(conversation, conversation.getContact(), content);
+            }
+            // Auto-assign to least busy agent if unassigned
+            if (conversation.getAssignedUser() == null && conversationRoutingService != null) {
+                conversationRoutingService.assignConversation(conversation, RoutingPolicy.LEAST_BUSY);
+            }
         }
         conversationRepository.save(conversation);
 
@@ -266,7 +334,11 @@ public class CrmServiceImpl implements CrmService {
         }
 
         String messageType = (mediaUrl != null && !mediaUrl.isBlank()) ? "MEDIA" : "TEXT";
-        return recordMessage(organizationId, conversation, "OUTBOUND", "AGENT", messageType, content, mediaUrl, externalMsgId);
+        Message reply = recordMessage(organizationId, conversation, "OUTBOUND", "AGENT", messageType, content, mediaUrl, externalMsgId);
+        if (slaMonitoringService != null) {
+            slaMonitoringService.recordFirstAgentReply(conversation);
+        }
+        return reply;
     }
 
     @Override
@@ -274,6 +346,18 @@ public class CrmServiceImpl implements CrmService {
     public Conversation resolveConversation(UUID organizationId, UUID conversationId, boolean resolved) {
         Conversation conversation = getConversationById(organizationId, conversationId);
         conversation.setResolved(resolved);
+        if (resolved) {
+            if (slaMonitoringService != null) {
+                slaMonitoringService.recordResolution(conversation);
+            }
+            if (csatService != null) {
+                try {
+                    csatService.triggerPostResolutionSurvey(organizationId, conversationId);
+                } catch (Exception e) {
+                    log.warn("Failed to dispatch post-resolution CSAT survey: {}", e.getMessage());
+                }
+            }
+        }
         Conversation saved = conversationRepository.save(conversation);
         liveChatStreamService.broadcastConversationResolved(organizationId, conversationId, resolved);
         log.info("Conversation [{}] resolved status updated to [{}] for org [{}]", conversationId, resolved, organizationId);

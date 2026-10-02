@@ -11,6 +11,7 @@ import java.util.UUID;
 @Repository
 public interface MembershipRepository extends JpaRepository<Membership, UUID> {
     List<Membership> findByUserId(UUID userId);
+    List<Membership> findByOrganizationId(UUID organizationId);
     Optional<Membership> findByOrganizationIdAndUserId(UUID organizationId, UUID userId);
     boolean existsByOrganizationIdAndUserId(UUID organizationId, UUID userId);
 }

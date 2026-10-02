@@ -239,6 +239,13 @@ public class CrmController {
                 .windowRemainingSeconds(window.getRemainingSeconds())
                 .lastMessageSnippet(lastSnippet)
                 .unreadCount(0)
+                .priority(c.getPriority() != null ? c.getPriority().name() : "NORMAL")
+                .sentiment(c.getSentiment() != null ? c.getSentiment().name() : "NEUTRAL")
+                .assignedUserEmail(c.getAssignedUser() != null ? c.getAssignedUser().getEmail() : null)
+                .slaFirstResponseDueAt(c.getSlaFirstResponseDueAt())
+                .slaResolutionDueAt(c.getSlaResolutionDueAt())
+                .slaFirstResponseBreached(c.isSlaFirstResponseBreached())
+                .slaResolutionBreached(c.isSlaResolutionBreached())
                 .build();
     }
 

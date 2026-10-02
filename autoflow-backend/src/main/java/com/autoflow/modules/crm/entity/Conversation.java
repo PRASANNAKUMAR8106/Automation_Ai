@@ -42,4 +42,38 @@ public class Conversation extends BaseEntity {
 
     @Column(name = "last_customer_message_at")
     private Instant lastCustomerMessageAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "priority", nullable = false)
+    @Builder.Default
+    private ConversationPriority priority = ConversationPriority.NORMAL;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sentiment", nullable = false)
+    @Builder.Default
+    private ConversationSentiment sentiment = ConversationSentiment.NEUTRAL;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "sla_policy_id")
+    private ConversationSlaPolicy slaPolicy;
+
+    @Column(name = "sla_first_response_due_at")
+    private Instant slaFirstResponseDueAt;
+
+    @Column(name = "sla_resolution_due_at")
+    private Instant slaResolutionDueAt;
+
+    @Column(name = "sla_first_response_breached", nullable = false)
+    @Builder.Default
+    private boolean slaFirstResponseBreached = false;
+
+    @Column(name = "sla_resolution_breached", nullable = false)
+    @Builder.Default
+    private boolean slaResolutionBreached = false;
+
+    @Column(name = "first_agent_reply_at")
+    private Instant firstAgentReplyAt;
+
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
 }

@@ -14,11 +14,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.autoflow.modules.crm.entity.ConversationPriority;
+import com.autoflow.modules.crm.entity.RoutingPolicy;
+
 import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AiAutopilotServiceImpl implements AiAutopilotService {
 
     private final ConversationRepository conversationRepository;
@@ -26,6 +28,34 @@ public class AiAutopilotServiceImpl implements AiAutopilotService {
     private final MessagingWindowService messagingWindowService;
     private final AiCopilotService aiCopilotService;
     private final CrmService crmService;
+    private final ConversationRoutingService conversationRoutingService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AiAutopilotServiceImpl(
+            ConversationRepository conversationRepository,
+            ContactRepository contactRepository,
+            MessagingWindowService messagingWindowService,
+            AiCopilotService aiCopilotService,
+            CrmService crmService,
+            ConversationRoutingService conversationRoutingService
+    ) {
+        this.conversationRepository = conversationRepository;
+        this.contactRepository = contactRepository;
+        this.messagingWindowService = messagingWindowService;
+        this.aiCopilotService = aiCopilotService;
+        this.crmService = crmService;
+        this.conversationRoutingService = conversationRoutingService;
+    }
+
+    public AiAutopilotServiceImpl(
+            ConversationRepository conversationRepository,
+            ContactRepository contactRepository,
+            MessagingWindowService messagingWindowService,
+            AiCopilotService aiCopilotService,
+            CrmService crmService
+    ) {
+        this(conversationRepository, contactRepository, messagingWindowService, aiCopilotService, crmService, null);
+    }
 
     @Override
     @Transactional
@@ -99,6 +129,11 @@ public class AiAutopilotServiceImpl implements AiAutopilotService {
         if (suggestion.isRequiresHumanHandoff()) {
             log.info("Auto-Pilot halted for conversation [{}]: Escalation detected [{}]. Preserved for human agent.",
                     conversationId, suggestion.getHumanHandoffReason());
+            conversation.setPriority(ConversationPriority.URGENT);
+            if (conversationRoutingService != null) {
+                conversationRoutingService.assignConversation(conversation, RoutingPolicy.LEAST_BUSY);
+            }
+            conversationRepository.save(conversation);
             return AutopilotExecutionResult.builder()
                     .dispatched(false)
                     .status("SKIPPED_HUMAN_HANDOFF")

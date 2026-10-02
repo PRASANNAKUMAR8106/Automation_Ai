@@ -48,6 +48,9 @@ class ApiConstants {
   static String crmConversationTyping(String id) => '/api/v1/crm/conversations/$id/typing';
   static String crmConversationResolve(String id) => '/api/v1/crm/conversations/$id/resolve';
   static String crmConversationAiSuggest(String id) => '/api/v1/crm/conversations/$id/ai-suggest';
+  static const String crmSlaPolicies = '/api/v1/crm/sla/policies';
+  static const String crmPerformanceAnalytics = '/api/v1/crm/analytics/performance';
+  static String crmConversationCsat(String id) => '/api/v1/crm/conversations/$id/csat';
 
   // Knowledge Base (RAG)
   static const String knowledgeArticles = '/api/v1/knowledge/articles';
