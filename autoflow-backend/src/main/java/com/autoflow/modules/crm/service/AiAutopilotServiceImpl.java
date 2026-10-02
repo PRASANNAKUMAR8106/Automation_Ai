@@ -151,6 +151,9 @@ public class AiAutopilotServiceImpl implements AiAutopilotService {
                     false
             );
 
+            conversation.setAiHandled(true);
+            conversationRepository.save(conversation);
+
             log.info("Auto-Pilot successfully dispatched automated reply for conversation [{}] on channel [{}]",
                     conversationId, channel);
 

@@ -31,4 +31,12 @@ public interface ConversationRepository extends JpaRepository<Conversation, UUID
 
     @org.springframework.data.jpa.repository.Query("SELECT c FROM Conversation c WHERE c.resolved = false AND c.slaResolutionDueAt IS NOT NULL AND c.slaResolutionDueAt < :now AND c.slaResolutionBreached = false")
     List<Conversation> findPendingResolutionBreaches(@org.springframework.data.repository.query.Param("now") java.time.Instant now);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Conversation c SET c.slaFirstResponseBreached = true, c.priority = com.autoflow.modules.crm.entity.ConversationPriority.URGENT WHERE c.id = :id AND c.slaFirstResponseBreached = false")
+    int markFirstResponseBreachedAtomic(@org.springframework.data.repository.query.Param("id") UUID id);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Conversation c SET c.slaResolutionBreached = true, c.priority = com.autoflow.modules.crm.entity.ConversationPriority.URGENT WHERE c.id = :id AND c.slaResolutionBreached = false")
+    int markResolutionBreachedAtomic(@org.springframework.data.repository.query.Param("id") UUID id);
 }

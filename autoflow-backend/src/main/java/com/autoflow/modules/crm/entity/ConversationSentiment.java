@@ -4,5 +4,6 @@ public enum ConversationSentiment {
     POSITIVE,
     NEUTRAL,
     NEGATIVE,
-    CHURN_RISK
+    CHURN_RISK,
+    URGENT
 }

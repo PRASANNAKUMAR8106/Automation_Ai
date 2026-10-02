@@ -1,8 +1,9 @@
 package com.autoflow.modules.crm.service;
 
-import com.autoflow.modules.crm.entity.Conversation;
-import com.autoflow.modules.crm.entity.RoutingPolicy;
+import com.autoflow.modules.crm.entity.*;
+import com.autoflow.modules.crm.repository.AgentChannelSpecializationRepository;
 import com.autoflow.modules.crm.repository.ConversationRepository;
+import com.autoflow.modules.crm.repository.ConversationSlaEventRepository;
 import com.autoflow.modules.tenant.entity.Membership;
 import com.autoflow.modules.tenant.repository.MembershipRepository;
 import com.autoflow.modules.user.entity.User;
@@ -29,6 +30,12 @@ class ConversationRoutingServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
 
+    @Mock
+    private AgentChannelSpecializationRepository specializationRepository;
+
+    @Mock
+    private ConversationSlaEventRepository slaEventRepository;
+
     private ConversationRoutingServiceImpl routingService;
 
     private final UUID testOrgId = UUID.randomUUID();
@@ -38,7 +45,12 @@ class ConversationRoutingServiceTest {
 
     @BeforeEach
     void setUp() {
-        routingService = new ConversationRoutingServiceImpl(conversationRepository, membershipRepository);
+        routingService = new ConversationRoutingServiceImpl(
+                conversationRepository,
+                membershipRepository,
+                specializationRepository,
+                slaEventRepository
+        );
 
         userAlice = User.builder()
                 .email("alice@autoflow.ai")
@@ -55,6 +67,7 @@ class ConversationRoutingServiceTest {
 
     private Conversation createConversation() {
         Conversation c = Conversation.builder()
+                .channel(ChannelType.WHATSAPP)
                 .build();
         c.setId(UUID.randomUUID());
         c.setOrganizationId(testOrgId);
@@ -78,6 +91,7 @@ class ConversationRoutingServiceTest {
 
         assertNotEquals(assigned1.getId(), assigned2.getId(), "Consecutive assignments must alternate across users in round robin");
         verify(conversationRepository, times(2)).save(any(Conversation.class));
+        verify(slaEventRepository, times(2)).save(any(ConversationSlaEvent.class));
     }
 
     @Test
@@ -97,6 +111,58 @@ class ConversationRoutingServiceTest {
         assertNotNull(assigned);
         assertEquals(userBob.getId(), assigned.getId(), "LEAST_BUSY must select Bob who has fewer active conversations");
         assertEquals(userBob, convo.getAssignedUser());
+        verify(conversationRepository).save(convo);
+        verify(slaEventRepository).save(any(ConversationSlaEvent.class));
+    }
+
+    @Test
+    @DisplayName("Should route to channel specialist with lowest workload when policy is CHANNEL_SPECIALIST")
+    void shouldRouteChannelSpecialist() {
+        Membership m1 = Membership.builder().user(userAlice).organizationId(testOrgId).build();
+        Membership m2 = Membership.builder().user(userBob).organizationId(testOrgId).build();
+        when(membershipRepository.findByOrganizationId(testOrgId)).thenReturn(List.of(m1, m2));
+
+        AgentChannelSpecialization specAlice = AgentChannelSpecialization.builder()
+                .user(userAlice)
+                .channel(ChannelType.WHATSAPP)
+                .active(true)
+                .build();
+        specAlice.setOrganizationId(testOrgId);
+
+        when(specializationRepository.findAllByOrganizationIdAndChannelAndActiveTrue(testOrgId, ChannelType.WHATSAPP))
+                .thenReturn(List.of(specAlice));
+
+        Conversation convo = createConversation();
+        convo.setChannel(ChannelType.WHATSAPP);
+
+        User assigned = routingService.assignConversation(convo, RoutingPolicy.CHANNEL_SPECIALIST);
+
+        assertNotNull(assigned);
+        assertEquals(userAlice.getId(), assigned.getId(), "CHANNEL_SPECIALIST must select Alice as the designated WhatsApp specialist");
+        verify(conversationRepository).save(convo);
+        verify(slaEventRepository).save(any(ConversationSlaEvent.class));
+    }
+
+    @Test
+    @DisplayName("Should fallback to LEAST_BUSY when policy is CHANNEL_SPECIALIST but no specialist is configured")
+    void shouldFallbackWhenNoChannelSpecialistConfigured() {
+        Membership m1 = Membership.builder().user(userAlice).organizationId(testOrgId).build();
+        Membership m2 = Membership.builder().user(userBob).organizationId(testOrgId).build();
+        when(membershipRepository.findByOrganizationId(testOrgId)).thenReturn(List.of(m1, m2));
+
+        when(specializationRepository.findAllByOrganizationIdAndChannelAndActiveTrue(testOrgId, ChannelType.TELEGRAM))
+                .thenReturn(List.of()); // No specialist for Telegram
+
+        when(conversationRepository.countByOrganizationIdAndAssignedUserIdAndResolvedFalse(testOrgId, userAlice.getId())).thenReturn(4L);
+        when(conversationRepository.countByOrganizationIdAndAssignedUserIdAndResolvedFalse(testOrgId, userBob.getId())).thenReturn(0L);
+
+        Conversation convo = createConversation();
+        convo.setChannel(ChannelType.TELEGRAM);
+
+        User assigned = routingService.assignConversation(convo, RoutingPolicy.CHANNEL_SPECIALIST);
+
+        assertNotNull(assigned);
+        assertEquals(userBob.getId(), assigned.getId(), "Must fallback to Bob who is least busy when no specialist is registered");
         verify(conversationRepository).save(convo);
     }
 

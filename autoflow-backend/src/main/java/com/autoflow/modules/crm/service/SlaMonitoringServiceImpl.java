@@ -1,14 +1,12 @@
 package com.autoflow.modules.crm.service;
 
 import com.autoflow.modules.crm.dto.ConversationIntelligenceDto.*;
-import com.autoflow.modules.crm.entity.Conversation;
-import com.autoflow.modules.crm.entity.ConversationPriority;
-import com.autoflow.modules.crm.entity.ConversationSlaPolicy;
-import com.autoflow.modules.crm.entity.RoutingPolicy;
+import com.autoflow.modules.crm.entity.*;
 import com.autoflow.modules.crm.repository.ConversationRepository;
+import com.autoflow.modules.crm.repository.ConversationSlaEventRepository;
 import com.autoflow.modules.crm.repository.ConversationSlaPolicyRepository;
 import com.autoflow.modules.crm.repository.CsatSurveyRepository;
-import lombok.RequiredArgsConstructor;
+import com.autoflow.modules.user.entity.User;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -23,12 +21,34 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SlaMonitoringServiceImpl implements SlaMonitoringService {
 
     private final ConversationSlaPolicyRepository policyRepository;
     private final ConversationRepository conversationRepository;
     private final CsatSurveyRepository csatSurveyRepository;
+    private final ConversationSlaEventRepository slaEventRepository;
+    private final ConversationRoutingService routingService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SlaMonitoringServiceImpl(
+            ConversationSlaPolicyRepository policyRepository,
+            ConversationRepository conversationRepository,
+            CsatSurveyRepository csatSurveyRepository,
+            ConversationSlaEventRepository slaEventRepository,
+            ConversationRoutingService routingService) {
+        this.policyRepository = policyRepository;
+        this.conversationRepository = conversationRepository;
+        this.csatSurveyRepository = csatSurveyRepository;
+        this.slaEventRepository = slaEventRepository;
+        this.routingService = routingService;
+    }
+
+    public SlaMonitoringServiceImpl(
+            ConversationSlaPolicyRepository policyRepository,
+            ConversationRepository conversationRepository,
+            CsatSurveyRepository csatSurveyRepository) {
+        this(policyRepository, conversationRepository, csatSurveyRepository, null, null);
+    }
 
     @Override
     @Transactional
@@ -41,6 +61,7 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
                 .resolutionTimeSeconds(request.getResolutionTimeSeconds())
                 .routingPolicy(request.getRoutingPolicy() != null ? request.getRoutingPolicy() : RoutingPolicy.LEAST_BUSY)
                 .active(request.isActive())
+                .whatsappTemplateEnabled(request.isWhatsappTemplateEnabled())
                 .build();
         policy.setOrganizationId(organizationId);
 
@@ -80,32 +101,33 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
             frtSeconds = policy.getFirstResponseTimeSeconds();
             resSeconds = policy.getResolutionTimeSeconds();
         } else {
-            // Sensible defaults based on priority tier
+            // Explicit priority deadlines
             switch (priority) {
                 case URGENT -> {
                     frtSeconds = 300;     // 5 minutes
-                    resSeconds = 3600;    // 1 hour
+                    resSeconds = 1800;    // 30 minutes
                 }
                 case HIGH -> {
                     frtSeconds = 900;     // 15 minutes
-                    resSeconds = 14400;   // 4 hours
+                    resSeconds = 7200;    // 2 hours
                 }
                 case LOW -> {
-                    frtSeconds = 3600;    // 1 hour
-                    resSeconds = 172800;  // 48 hours
+                    frtSeconds = 7200;    // 2 hours
+                    resSeconds = 86400;   // 24 hours
                 }
                 default -> { // NORMAL
                     frtSeconds = 1800;    // 30 minutes
-                    resSeconds = 86400;   // 24 hours
+                    resSeconds = 28800;   // 8 hours
                 }
             }
         }
 
+        Instant baseTime = conversation.getCreatedAt() != null ? conversation.getCreatedAt() : now;
         if (conversation.getSlaFirstResponseDueAt() == null) {
-            conversation.setSlaFirstResponseDueAt(now.plusSeconds(frtSeconds));
+            conversation.setSlaFirstResponseDueAt(baseTime.plusSeconds(frtSeconds));
         }
         if (conversation.getSlaResolutionDueAt() == null) {
-            conversation.setSlaResolutionDueAt(now.plusSeconds(resSeconds));
+            conversation.setSlaResolutionDueAt(baseTime.plusSeconds(resSeconds));
         }
     }
 
@@ -115,10 +137,22 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
         if (conversation.getFirstAgentReplyAt() == null) {
             Instant now = Instant.now();
             conversation.setFirstAgentReplyAt(now);
+            conversation.setHumanAgentReplied(true);
             if (conversation.getSlaFirstResponseDueAt() != null && now.isAfter(conversation.getSlaFirstResponseDueAt())) {
                 conversation.setSlaFirstResponseBreached(true);
                 log.warn("SLA First Response breached for conversation [{}] in org [{}]",
                         conversation.getId(), conversation.getOrganizationId());
+
+                if (slaEventRepository != null) {
+                    ConversationSlaEvent event = ConversationSlaEvent.builder()
+                            .conversation(conversation)
+                            .slaPolicy(conversation.getSlaPolicy())
+                            .eventType(ConversationSlaEventType.BREACH_FIRST_RESPONSE)
+                            .reason("Late first response at " + now + " (due: " + conversation.getSlaFirstResponseDueAt() + ")")
+                            .build();
+                    event.setOrganizationId(conversation.getOrganizationId());
+                    slaEventRepository.save(event);
+                }
             }
         }
     }
@@ -132,6 +166,17 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
             conversation.setSlaResolutionBreached(true);
             log.warn("SLA Resolution breached for conversation [{}] in org [{}]",
                     conversation.getId(), conversation.getOrganizationId());
+
+            if (slaEventRepository != null) {
+                ConversationSlaEvent event = ConversationSlaEvent.builder()
+                        .conversation(conversation)
+                        .slaPolicy(conversation.getSlaPolicy())
+                        .eventType(ConversationSlaEventType.BREACH_RESOLUTION)
+                        .reason("Late resolution at " + now + " (due: " + conversation.getSlaResolutionDueAt() + ")")
+                        .build();
+                event.setOrganizationId(conversation.getOrganizationId());
+                slaEventRepository.save(event);
+            }
         }
     }
 
@@ -142,16 +187,64 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
         Instant now = Instant.now();
         List<Conversation> frtBreaches = conversationRepository.findPendingFirstResponseBreaches(now);
         for (Conversation c : frtBreaches) {
-            c.setSlaFirstResponseBreached(true);
-            conversationRepository.save(c);
-            log.warn("Auto-flagged SLA First Response Breach for conversation [{}]", c.getId());
+            int updated = conversationRepository.markFirstResponseBreachedAtomic(c.getId());
+            if (updated > 0 || !c.isSlaFirstResponseBreached()) {
+                c.setSlaFirstResponseBreached(true);
+                c.setPriority(ConversationPriority.URGENT);
+                c.setEscalatedAt(now);
+                conversationRepository.save(c);
+                log.warn("Auto-flagged SLA First Response Breach for conversation [{}]", c.getId());
+
+                if (slaEventRepository != null) {
+                    ConversationSlaEvent breachEvent = ConversationSlaEvent.builder()
+                            .conversation(c)
+                            .slaPolicy(c.getSlaPolicy())
+                            .eventType(ConversationSlaEventType.BREACH_FIRST_RESPONSE)
+                            .reason("First response deadline passed: " + c.getSlaFirstResponseDueAt())
+                            .build();
+                    breachEvent.setOrganizationId(c.getOrganizationId());
+                    slaEventRepository.save(breachEvent);
+                }
+
+                if (routingService != null) {
+                    User escalatedUser = routingService.assignConversation(c, RoutingPolicy.LEAST_BUSY);
+                    c.setEscalatedToUser(escalatedUser);
+                    if (slaEventRepository != null && escalatedUser != null) {
+                        ConversationSlaEvent escEvent = ConversationSlaEvent.builder()
+                                .conversation(c)
+                                .slaPolicy(c.getSlaPolicy())
+                                .eventType(ConversationSlaEventType.ESCALATION)
+                                .escalatedToUser(escalatedUser)
+                                .reason("Auto-escalated to URGENT due to first response SLA breach")
+                                .build();
+                        escEvent.setOrganizationId(c.getOrganizationId());
+                        slaEventRepository.save(escEvent);
+                    }
+                }
+            }
         }
 
         List<Conversation> resBreaches = conversationRepository.findPendingResolutionBreaches(now);
         for (Conversation c : resBreaches) {
-            c.setSlaResolutionBreached(true);
-            conversationRepository.save(c);
-            log.warn("Auto-flagged SLA Resolution Breach for conversation [{}]", c.getId());
+            int updated = conversationRepository.markResolutionBreachedAtomic(c.getId());
+            if (updated > 0 || !c.isSlaResolutionBreached()) {
+                c.setSlaResolutionBreached(true);
+                c.setPriority(ConversationPriority.URGENT);
+                c.setEscalatedAt(now);
+                conversationRepository.save(c);
+                log.warn("Auto-flagged SLA Resolution Breach for conversation [{}]", c.getId());
+
+                if (slaEventRepository != null) {
+                    ConversationSlaEvent breachEvent = ConversationSlaEvent.builder()
+                            .conversation(c)
+                            .slaPolicy(c.getSlaPolicy())
+                            .eventType(ConversationSlaEventType.BREACH_RESOLUTION)
+                            .reason("Resolution deadline passed: " + c.getSlaResolutionDueAt())
+                            .build();
+                    breachEvent.setOrganizationId(c.getOrganizationId());
+                    slaEventRepository.save(breachEvent);
+                }
+            }
         }
     }
 
@@ -193,8 +286,10 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
         Double avgCsat = csatSurveyRepository.getAverageRatingByOrganizationId(organizationId);
         Long totalCsat = csatSurveyRepository.countCompletedSurveysByOrganizationId(organizationId);
 
-        // AI Deflection Rate: resolved conversations that had NO human agent reply
-        long deflectedByAi = all.stream().filter(c -> c.isResolved() && c.getFirstAgentReplyAt() == null).count();
+        // AI Deflection Rate: resolved conversations where AI replied or no human agent replied
+        long deflectedByAi = all.stream()
+                .filter(c -> c.isResolved() && (c.isAiHandled() || c.getFirstAgentReplyAt() == null) && !c.isHumanAgentReplied())
+                .count();
         double deflectionRate = resolved == 0 ? 0.0 : ((double) deflectedByAi / resolved) * 100.0;
 
         return PerformanceAnalyticsResponse.builder()
@@ -221,6 +316,7 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
                 .resolutionTimeSeconds(p.getResolutionTimeSeconds())
                 .routingPolicy(p.getRoutingPolicy())
                 .active(p.isActive())
+                .whatsappTemplateEnabled(p.isWhatsappTemplateEnabled())
                 .createdAt(p.getCreatedAt())
                 .build();
     }

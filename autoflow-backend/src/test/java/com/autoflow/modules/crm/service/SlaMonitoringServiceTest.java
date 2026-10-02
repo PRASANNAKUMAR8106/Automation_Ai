@@ -3,6 +3,7 @@ package com.autoflow.modules.crm.service;
 import com.autoflow.modules.crm.dto.ConversationIntelligenceDto.*;
 import com.autoflow.modules.crm.entity.*;
 import com.autoflow.modules.crm.repository.ConversationRepository;
+import com.autoflow.modules.crm.repository.ConversationSlaEventRepository;
 import com.autoflow.modules.crm.repository.ConversationSlaPolicyRepository;
 import com.autoflow.modules.crm.repository.CsatSurveyRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,13 +35,25 @@ class SlaMonitoringServiceTest {
     @Mock
     private CsatSurveyRepository csatSurveyRepository;
 
+    @Mock
+    private ConversationSlaEventRepository slaEventRepository;
+
+    @Mock
+    private ConversationRoutingService routingService;
+
     private SlaMonitoringServiceImpl slaService;
 
     private final UUID testOrgId = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
-        slaService = new SlaMonitoringServiceImpl(policyRepository, conversationRepository, csatSurveyRepository);
+        slaService = new SlaMonitoringServiceImpl(
+                policyRepository,
+                conversationRepository,
+                csatSurveyRepository,
+                slaEventRepository,
+                routingService
+        );
     }
 
     @Test
@@ -74,7 +87,7 @@ class SlaMonitoringServiceTest {
     }
 
     @Test
-    @DisplayName("Should detect SLA First Response breach when agent reply occurs after deadline")
+    @DisplayName("Should detect SLA First Response breach when agent reply occurs after deadline and log breach event")
     void shouldDetectFirstResponseBreachWhenLate() {
         Conversation convo = Conversation.builder()
                 .channel(ChannelType.WHATSAPP)
@@ -87,7 +100,9 @@ class SlaMonitoringServiceTest {
         slaService.recordFirstAgentReply(convo);
 
         assertNotNull(convo.getFirstAgentReplyAt());
+        assertTrue(convo.isHumanAgentReplied());
         assertTrue(convo.isSlaFirstResponseBreached(), "Late reply must set slaFirstResponseBreached to true");
+        verify(slaEventRepository).save(any(ConversationSlaEvent.class));
     }
 
     @Test
@@ -104,11 +119,13 @@ class SlaMonitoringServiceTest {
         slaService.recordFirstAgentReply(convo);
 
         assertNotNull(convo.getFirstAgentReplyAt());
+        assertTrue(convo.isHumanAgentReplied());
         assertFalse(convo.isSlaFirstResponseBreached(), "On-time reply must not breach SLA");
+        verifyNoInteractions(slaEventRepository);
     }
 
     @Test
-    @DisplayName("Background scanner flags overdue conversations as breached")
+    @DisplayName("Background scanner atomically claims overdue breaches and records escalation events")
     void shouldScanAndFlagOverdueBreaches() {
         Conversation overdueConvo = Conversation.builder()
                 .priority(ConversationPriority.HIGH)
@@ -122,11 +139,15 @@ class SlaMonitoringServiceTest {
                 .thenReturn(List.of(overdueConvo));
         when(conversationRepository.findPendingResolutionBreaches(any(Instant.class)))
                 .thenReturn(List.of());
+        when(conversationRepository.markFirstResponseBreachedAtomic(overdueConvo.getId()))
+                .thenReturn(1); // 1 row updated -> won atomic lock
 
         slaService.scanAndProcessBreaches();
 
         assertTrue(overdueConvo.isSlaFirstResponseBreached());
+        assertEquals(ConversationPriority.URGENT, overdueConvo.getPriority());
         verify(conversationRepository).save(overdueConvo);
+        verify(slaEventRepository, atLeastOnce()).save(any(ConversationSlaEvent.class));
     }
 
     @Test
@@ -140,6 +161,7 @@ class SlaMonitoringServiceTest {
         Conversation c1 = Conversation.builder()
                 .resolved(true)
                 .firstAgentReplyAt(t1)
+                .humanAgentReplied(true)
                 .resolvedAt(t2)
                 .slaFirstResponseBreached(false)
                 .slaResolutionBreached(false)
@@ -149,6 +171,8 @@ class SlaMonitoringServiceTest {
         // Conversation 2: deflected by AI (no human reply, resolved)
         Conversation c2 = Conversation.builder()
                 .resolved(true)
+                .aiHandled(true)
+                .humanAgentReplied(false)
                 .firstAgentReplyAt(null)
                 .resolvedAt(t0.plusSeconds(60))
                 .slaFirstResponseBreached(false)

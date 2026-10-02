@@ -65,6 +65,7 @@ class SlaPolicyModel {
   final int resolutionTimeSeconds;
   final String routingPolicy;
   final bool active;
+  final bool whatsappTemplateEnabled;
 
   const SlaPolicyModel({
     required this.id,
@@ -75,6 +76,7 @@ class SlaPolicyModel {
     required this.resolutionTimeSeconds,
     required this.routingPolicy,
     required this.active,
+    this.whatsappTemplateEnabled = false,
   });
 
   factory SlaPolicyModel.fromJson(Map<String, dynamic> json) {
@@ -87,6 +89,7 @@ class SlaPolicyModel {
       resolutionTimeSeconds: (json['resolutionTimeSeconds'] as num?)?.toInt() ?? 7200,
       routingPolicy: json['routingPolicy']?.toString() ?? 'LEAST_BUSY',
       active: json['active'] as bool? ?? true,
+      whatsappTemplateEnabled: json['whatsappTemplateEnabled'] as bool? ?? false,
     );
   }
 }

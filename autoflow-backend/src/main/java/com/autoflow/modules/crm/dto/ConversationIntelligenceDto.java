@@ -33,6 +33,8 @@ public class ConversationIntelligenceDto {
         private RoutingPolicy routingPolicy;
         @Builder.Default
         private boolean active = true;
+        @Builder.Default
+        private boolean whatsappTemplateEnabled = false;
     }
 
     @Data
@@ -48,6 +50,7 @@ public class ConversationIntelligenceDto {
         private int resolutionTimeSeconds;
         private RoutingPolicy routingPolicy;
         private boolean active;
+        private boolean whatsappTemplateEnabled;
         private Instant createdAt;
     }
 

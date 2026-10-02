@@ -111,6 +111,31 @@ class CsatServiceTest {
     }
 
     @Test
+    @DisplayName("Idempotency: Re-dispatching survey for already surveyed conversation returns existing survey without duplicate message")
+    void shouldBeIdempotentOnConcurrentOrRepeatDispatch() {
+        Contact contact = createContact(false);
+        Conversation conversation = createConversation(contact);
+
+        CsatSurvey existingSurvey = CsatSurvey.builder()
+                .conversation(conversation)
+                .contact(contact)
+                .status(CsatStatus.DISPATCHED)
+                .build();
+        existingSurvey.setId(UUID.randomUUID());
+        existingSurvey.setOrganizationId(testOrgId);
+
+        when(conversationRepository.findByIdAndOrganizationId(testConvoId, testOrgId)).thenReturn(Optional.of(conversation));
+        when(csatSurveyRepository.findByOrganizationIdAndConversationId(testOrgId, testConvoId)).thenReturn(Optional.of(existingSurvey));
+
+        CsatSurveyResponse response = csatService.triggerPostResolutionSurvey(testOrgId, testConvoId);
+
+        assertNotNull(response);
+        assertEquals(existingSurvey.getId(), response.getId());
+        verifyNoInteractions(messageRepository);
+        verify(csatSurveyRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("Phase 19 Compliance: Should skip CSAT survey when contact is suppressed or opted out")
     void shouldSkipSurveyWhenContactIsSuppressed() {
         Contact contact = createContact(true); // suppressed via "opt_out" tag
@@ -135,8 +160,8 @@ class CsatServiceTest {
     }
 
     @Test
-    @DisplayName("Phase 18 Compliance: Should skip CSAT survey when 24-hour care window is expired")
-    void shouldSkipSurveyWhenWindowExpired() {
+    @DisplayName("Phase 18 Compliance: Should skip CSAT survey when 24-hour care window is expired and no template is configured")
+    void shouldSkipSurveyWhenWindowExpiredAndNoTemplate() {
         Contact contact = createContact(false);
         Conversation conversation = createConversation(contact);
 
@@ -163,7 +188,40 @@ class CsatServiceTest {
     }
 
     @Test
-    @DisplayName("Should record feedback rating and escalate priority to HIGH if rating is low (<= 2)")
+    @DisplayName("Phase 21 WhatsApp Template Fallback: Dispatches approved template when window is closed but template is permitted")
+    void shouldDispatchApprovedTemplateWhenWindowClosedAndTemplateEnabled() {
+        Contact contact = createContact(false);
+        Conversation conversation = createConversation(contact);
+
+        ConversationSlaPolicy policy = ConversationSlaPolicy.builder()
+                .whatsappTemplateEnabled(true)
+                .build();
+        conversation.setSlaPolicy(policy);
+
+        when(conversationRepository.findByIdAndOrganizationId(testConvoId, testOrgId)).thenReturn(Optional.of(conversation));
+        when(csatSurveyRepository.findByOrganizationIdAndConversationId(testOrgId, testConvoId)).thenReturn(Optional.empty());
+        when(contactRepository.findById(testContactId)).thenReturn(Optional.of(contact));
+
+        CrmDto.MessagingWindowResponse expiredWindow = CrmDto.MessagingWindowResponse.builder()
+                .canSendFreeform(false)
+                .build();
+        when(messagingWindowService.evaluateWindow(conversation)).thenReturn(expiredWindow);
+
+        when(csatSurveyRepository.save(any(CsatSurvey.class))).thenAnswer(i -> {
+            CsatSurvey s = i.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        CsatSurveyResponse response = csatService.triggerPostResolutionSurvey(testOrgId, testConvoId);
+
+        assertNotNull(response);
+        assertEquals("DISPATCHED", response.getStatus());
+        verify(messageRepository).save(argThat(m -> "TEMPLATE".equals(m.getMessageType())));
+    }
+
+    @Test
+    @DisplayName("Should record feedback rating, enforce 1-5 scale, and escalate priority to HIGH if rating is low (<= 2)")
     void shouldRecordFeedbackAndEscalateOnLowRating() {
         Contact contact = createContact(false);
         Conversation conversation = createConversation(contact);
@@ -193,5 +251,31 @@ class CsatServiceTest {
         assertEquals(1, response.getRating());
         assertEquals(ConversationPriority.HIGH, conversation.getPriority(), "Low rating must escalate conversation priority to HIGH");
         verify(conversationRepository).save(conversation);
+    }
+
+    @Test
+    @DisplayName("Should reject feedback submission if rating is out of bounds or survey is already completed")
+    void shouldRejectInvalidRatingOrDuplicateSubmission() {
+        // 1. Out of bounds rating
+        SubmitCsatRequest invalidRating = SubmitCsatRequest.builder().rating(6).build();
+        assertThrows(IllegalArgumentException.class, () ->
+                csatService.submitFeedback(testOrgId, testConvoId, invalidRating));
+
+        // 2. Already completed survey
+        Contact contact = createContact(false);
+        Conversation conversation = createConversation(contact);
+        CsatSurvey completedSurvey = CsatSurvey.builder()
+                .conversation(conversation)
+                .contact(contact)
+                .status(CsatStatus.COMPLETED)
+                .build();
+        completedSurvey.setOrganizationId(testOrgId);
+
+        when(conversationRepository.findByIdAndOrganizationId(testConvoId, testOrgId)).thenReturn(Optional.of(conversation));
+        when(csatSurveyRepository.findByOrganizationIdAndConversationId(testOrgId, testConvoId)).thenReturn(Optional.of(completedSurvey));
+
+        SubmitCsatRequest validRequest = SubmitCsatRequest.builder().rating(5).build();
+        assertThrows(IllegalStateException.class, () ->
+                csatService.submitFeedback(testOrgId, testConvoId, validRequest));
     }
 }

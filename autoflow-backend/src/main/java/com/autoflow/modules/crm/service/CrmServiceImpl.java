@@ -335,6 +335,8 @@ public class CrmServiceImpl implements CrmService {
 
         String messageType = (mediaUrl != null && !mediaUrl.isBlank()) ? "MEDIA" : "TEXT";
         Message reply = recordMessage(organizationId, conversation, "OUTBOUND", "AGENT", messageType, content, mediaUrl, externalMsgId);
+        conversation.setHumanAgentReplied(true);
+        conversationRepository.save(conversation);
         if (slaMonitoringService != null) {
             slaMonitoringService.recordFirstAgentReply(conversation);
         }

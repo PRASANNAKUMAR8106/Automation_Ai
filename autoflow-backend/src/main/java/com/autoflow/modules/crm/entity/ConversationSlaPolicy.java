@@ -41,4 +41,8 @@ public class ConversationSlaPolicy extends TenantAwareEntity {
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private boolean active = true;
+
+    @Column(name = "whatsapp_template_enabled", nullable = false)
+    @Builder.Default
+    private boolean whatsappTemplateEnabled = false;
 }

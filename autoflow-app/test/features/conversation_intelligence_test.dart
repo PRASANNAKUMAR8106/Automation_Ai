@@ -45,6 +45,7 @@ void main() {
         'resolutionTimeSeconds': 3600,
         'routingPolicy': 'ROUND_ROBIN',
         'active': true,
+        'whatsappTemplateEnabled': true,
       };
 
       final model = SlaPolicyModel.fromJson(json);
@@ -57,6 +58,7 @@ void main() {
       expect(model.resolutionTimeSeconds, 3600);
       expect(model.routingPolicy, 'ROUND_ROBIN');
       expect(model.active, true);
+      expect(model.whatsappTemplateEnabled, true);
     });
 
     test('CsatSurveyModel parses JSON correctly', () {

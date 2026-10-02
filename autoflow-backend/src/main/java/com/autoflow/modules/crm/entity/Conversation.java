@@ -76,4 +76,19 @@ public class Conversation extends BaseEntity {
 
     @Column(name = "resolved_at")
     private Instant resolvedAt;
+
+    @Column(name = "ai_handled", nullable = false)
+    @Builder.Default
+    private boolean aiHandled = false;
+
+    @Column(name = "human_agent_replied", nullable = false)
+    @Builder.Default
+    private boolean humanAgentReplied = false;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "escalated_to_user_id")
+    private com.autoflow.modules.user.entity.User escalatedToUser;
+
+    @Column(name = "escalated_at")
+    private Instant escalatedAt;
 }

@@ -1,6 +1,7 @@
 package com.autoflow.modules.crm.service;
 
 import com.autoflow.modules.crm.entity.*;
+import com.autoflow.modules.crm.repository.ContactLeadScoreAuditRepository;
 import com.autoflow.modules.crm.repository.ContactRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,17 +23,20 @@ class SentimentAnalysisServiceTest {
     @Mock
     private ContactRepository contactRepository;
 
+    @Mock
+    private ContactLeadScoreAuditRepository leadScoreAuditRepository;
+
     private SentimentAnalysisServiceImpl sentimentService;
 
     private final UUID testOrgId = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
-        sentimentService = new SentimentAnalysisServiceImpl(contactRepository);
+        sentimentService = new SentimentAnalysisServiceImpl(contactRepository, leadScoreAuditRepository);
     }
 
     @Test
-    @DisplayName("Should classify positive sentiment and increment lead score")
+    @DisplayName("Should classify positive sentiment, increment lead score, and record lead score audit")
     void shouldClassifyPositiveSentiment() {
         Contact contact = Contact.builder()
                 .leadScore(10)
@@ -54,6 +58,7 @@ class SentimentAnalysisServiceTest {
         assertEquals(ConversationPriority.NORMAL, conversation.getPriority());
         assertEquals(20, contact.getLeadScore());
         verify(contactRepository).save(contact);
+        verify(leadScoreAuditRepository).save(any(ContactLeadScoreAudit.class));
     }
 
     @Test
@@ -79,6 +84,33 @@ class SentimentAnalysisServiceTest {
         assertEquals(ConversationPriority.URGENT, conversation.getPriority());
         assertEquals(20, contact.getLeadScore()); // 40 - 20 = 20
         verify(contactRepository).save(contact);
+        verify(leadScoreAuditRepository).save(any(ContactLeadScoreAudit.class));
+    }
+
+    @Test
+    @DisplayName("Should detect URGENT sentiment from emergency keywords and escalate priority to URGENT")
+    void shouldClassifyUrgentSentiment() {
+        Contact contact = Contact.builder()
+                .leadScore(30)
+                .leadStatus(LeadStatus.NEW)
+                .build();
+        contact.setId(UUID.randomUUID());
+        contact.setOrganizationId(testOrgId);
+
+        Conversation conversation = Conversation.builder()
+                .priority(ConversationPriority.NORMAL)
+                .contact(contact)
+                .build();
+
+        String urgentMessage = "Critical emergency! Production database is down, need help asap!";
+
+        sentimentService.processInboundIntelligence(conversation, contact, urgentMessage);
+
+        assertEquals(ConversationSentiment.URGENT, conversation.getSentiment());
+        assertEquals(ConversationPriority.URGENT, conversation.getPriority());
+        assertEquals(10, contact.getLeadScore()); // 30 - 20 = 10
+        verify(contactRepository).save(contact);
+        verify(leadScoreAuditRepository).save(any(ContactLeadScoreAudit.class));
     }
 
     @Test
@@ -104,6 +136,7 @@ class SentimentAnalysisServiceTest {
         assertEquals(ConversationPriority.HIGH, conversation.getPriority());
         assertEquals(20, contact.getLeadScore()); // 25 - 5 = 20
         verify(contactRepository).save(contact);
+        verify(leadScoreAuditRepository).save(any(ContactLeadScoreAudit.class));
     }
 
     @Test
@@ -131,5 +164,6 @@ class SentimentAnalysisServiceTest {
         assertEquals(65, contact.getLeadScore());
         assertEquals(LeadStatus.QUALIFIED, contact.getLeadStatus());
         verify(contactRepository).save(contact);
+        verify(leadScoreAuditRepository).save(any(ContactLeadScoreAudit.class));
     }
 }

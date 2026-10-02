@@ -1,12 +1,8 @@
 package com.autoflow.modules.crm.service;
 
-import com.autoflow.modules.crm.entity.Contact;
-import com.autoflow.modules.crm.entity.Conversation;
-import com.autoflow.modules.crm.entity.ConversationPriority;
-import com.autoflow.modules.crm.entity.ConversationSentiment;
-import com.autoflow.modules.crm.entity.LeadStatus;
+import com.autoflow.modules.crm.entity.*;
+import com.autoflow.modules.crm.repository.ContactLeadScoreAuditRepository;
 import com.autoflow.modules.crm.repository.ContactRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -15,10 +11,22 @@ import java.util.Set;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class SentimentAnalysisServiceImpl implements SentimentAnalysisService {
 
     private final ContactRepository contactRepository;
+    private final ContactLeadScoreAuditRepository leadScoreAuditRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SentimentAnalysisServiceImpl(
+            ContactRepository contactRepository,
+            ContactLeadScoreAuditRepository leadScoreAuditRepository) {
+        this.contactRepository = contactRepository;
+        this.leadScoreAuditRepository = leadScoreAuditRepository;
+    }
+
+    public SentimentAnalysisServiceImpl(ContactRepository contactRepository) {
+        this(contactRepository, null);
+    }
 
     private static final Set<String> CHURN_KEYWORDS = Set.of(
             "cancel subscription", "cancel my", "refund immediately", "scam",
@@ -60,6 +68,12 @@ public class SentimentAnalysisServiceImpl implements SentimentAnalysisService {
             }
         }
 
+        for (String urgent : URGENT_KEYWORDS) {
+            if (lower.contains(urgent)) {
+                return ConversationSentiment.URGENT;
+            }
+        }
+
         for (String neg : NEGATIVE_KEYWORDS) {
             if (lower.contains(neg)) {
                 return ConversationSentiment.NEGATIVE;
@@ -77,7 +91,7 @@ public class SentimentAnalysisServiceImpl implements SentimentAnalysisService {
 
     @Override
     public ConversationPriority determinePriority(String messageText, ConversationSentiment sentiment) {
-        if (sentiment == ConversationSentiment.CHURN_RISK) {
+        if (sentiment == ConversationSentiment.CHURN_RISK || sentiment == ConversationSentiment.URGENT) {
             return ConversationPriority.URGENT;
         }
 
@@ -104,6 +118,8 @@ public class SentimentAnalysisServiceImpl implements SentimentAnalysisService {
 
     @Override
     public void processInboundIntelligence(Conversation conversation, Contact contact, String messageText) {
+        long startNanos = System.nanoTime();
+
         ConversationSentiment sentiment = analyzeSentiment(messageText);
         ConversationPriority priority = determinePriority(messageText, sentiment);
 
@@ -118,7 +134,7 @@ public class SentimentAnalysisServiceImpl implements SentimentAnalysisService {
             switch (sentiment) {
                 case POSITIVE -> scoreDelta += 10;
                 case NEGATIVE -> scoreDelta -= 5;
-                case CHURN_RISK -> scoreDelta -= 20;
+                case CHURN_RISK, URGENT -> scoreDelta -= 20;
                 default -> {}
             }
 
@@ -133,7 +149,8 @@ public class SentimentAnalysisServiceImpl implements SentimentAnalysisService {
             }
 
             if (scoreDelta != 0) {
-                int newScore = Math.max(0, contact.getLeadScore() + scoreDelta);
+                int previousScore = contact.getLeadScore();
+                int newScore = Math.max(0, previousScore + scoreDelta);
                 contact.setLeadScore(newScore);
 
                 // Auto-qualify leads with high intent and high engagement score
@@ -142,7 +159,25 @@ public class SentimentAnalysisServiceImpl implements SentimentAnalysisService {
                     log.info("Contact [{}] automatically advanced to QUALIFIED status (Score: {})", contact.getId(), newScore);
                 }
                 contactRepository.save(contact);
+
+                if (leadScoreAuditRepository != null) {
+                    ContactLeadScoreAudit audit = ContactLeadScoreAudit.builder()
+                            .contact(contact)
+                            .conversation(conversation)
+                            .previousScore(previousScore)
+                            .newScore(newScore)
+                            .scoreDelta(scoreDelta)
+                            .reason("Sentiment: " + sentiment + ", Inbound message evaluation")
+                            .build();
+                    audit.setOrganizationId(conversation.getOrganizationId());
+                    leadScoreAuditRepository.save(audit);
+                }
             }
+        }
+
+        long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+        if (durationMs > 20) {
+            log.warn("Sentiment analysis exceeded 20ms performance target: {}ms", durationMs);
         }
     }
 }

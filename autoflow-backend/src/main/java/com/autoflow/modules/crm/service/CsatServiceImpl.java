@@ -10,6 +10,8 @@ import com.autoflow.modules.crm.repository.CsatSurveyRepository;
 import com.autoflow.modules.crm.repository.MessageRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,13 +41,13 @@ public class CsatServiceImpl implements CsatService {
 
         Contact contact = conversation.getContact();
 
-        // Check if survey already exists
+        // 1. Idempotency Check: return existing survey if already initiated
         Optional<CsatSurvey> existing = csatSurveyRepository.findByOrganizationIdAndConversationId(organizationId, conversationId);
         if (existing.isPresent()) {
             return toSurveyResponse(existing.get());
         }
 
-        // 1. Re-check persistent consent and suppression (Phase 19 compliance)
+        // 2. Re-check persistent consent and suppression (Phase 19 compliance)
         Contact freshContact = contactRepository.findById(contact.getId()).orElse(contact);
         if (freshContact.isSuppressed() || freshContact.isOptedOut()) {
             log.info("CSAT survey skipped for conversation [{}]: Recipient [{}] is opted out or suppressed.",
@@ -57,12 +59,24 @@ public class CsatServiceImpl implements CsatService {
                     .status(CsatStatus.SKIPPED_SUPPRESSED)
                     .build();
             skipped.setOrganizationId(organizationId);
-            return toSurveyResponse(csatSurveyRepository.save(skipped));
+            return toSurveyResponse(saveSurveySafely(skipped, organizationId, conversationId));
         }
 
-        // 2. Channel session window compliance (Phase 18 compliance)
+        // 3. Channel session window compliance & template fallback (Phase 18 & Phase 21 compliance)
         CrmDto.MessagingWindowResponse window = messagingWindowService.evaluateWindow(conversation);
-        if (!window.isCanSendFreeform()) {
+        boolean canSend = window.isCanSendFreeform();
+        boolean useTemplate = false;
+
+        if (!canSend) {
+            if (conversation.getChannel() == ChannelType.WHATSAPP
+                    && conversation.getSlaPolicy() != null
+                    && conversation.getSlaPolicy().isWhatsappTemplateEnabled()) {
+                useTemplate = true;
+                canSend = true;
+            }
+        }
+
+        if (!canSend) {
             log.info("CSAT survey skipped for conversation [{}]: 24-hour customer care session window expired.",
                     conversationId);
             CsatSurvey skipped = CsatSurvey.builder()
@@ -72,17 +86,27 @@ public class CsatServiceImpl implements CsatService {
                     .status(CsatStatus.SKIPPED_WINDOW_EXPIRED)
                     .build();
             skipped.setOrganizationId(organizationId);
-            return toSurveyResponse(csatSurveyRepository.save(skipped));
+            return toSurveyResponse(saveSurveySafely(skipped, organizationId, conversationId));
         }
 
-        // 3. Dispatch CSAT Survey
+        // 4. Dispatch CSAT Survey with channel-appropriate message format
+        String messageType = "TEXT";
+        String content = CSAT_PROMPT_TEXT;
+
+        if (useTemplate) {
+            messageType = "TEMPLATE";
+            content = "csat_survey_template";
+        } else if (conversation.getChannel() == ChannelType.TELEGRAM) {
+            messageType = "INTERACTIVE";
+        }
+
         Message surveyMessage = Message.builder()
                 .organizationId(organizationId)
                 .conversation(conversation)
                 .direction("OUTBOUND")
                 .senderType("BOT")
-                .messageType("TEXT")
-                .content(CSAT_PROMPT_TEXT)
+                .messageType(messageType)
+                .content(content)
                 .sentAt(Instant.now())
                 .deliveryStatus("DELIVERED")
                 .build();
@@ -97,31 +121,47 @@ public class CsatServiceImpl implements CsatService {
                 .build();
         survey.setOrganizationId(organizationId);
 
-        CsatSurvey saved = csatSurveyRepository.save(survey);
-        log.info("Dispatched CSAT survey [{}] for conversation [{}] in org [{}]",
-                saved.getId(), conversationId, organizationId);
+        CsatSurvey saved = saveSurveySafely(survey, organizationId, conversationId);
+        log.info("Dispatched CSAT survey [{}] for conversation [{}] in org [{}] (channel: {}, template: {})",
+                saved.getId(), conversationId, organizationId, conversation.getChannel(), useTemplate);
 
         return toSurveyResponse(saved);
+    }
+
+    private CsatSurvey saveSurveySafely(CsatSurvey survey, UUID organizationId, UUID conversationId) {
+        try {
+            return csatSurveyRepository.save(survey);
+        } catch (DataIntegrityViolationException ex) {
+            log.warn("Race-condition caught on CSAT survey dispatch for conversation [{}], returning existing survey", conversationId);
+            return csatSurveyRepository.findByOrganizationIdAndConversationId(organizationId, conversationId)
+                    .orElse(survey);
+        }
     }
 
     @Override
     @Transactional
     public CsatSurveyResponse submitFeedback(UUID organizationId, UUID conversationId, SubmitCsatRequest request) {
+        if (request.getRating() == null || request.getRating() < 1 || request.getRating() > 5) {
+            throw new IllegalArgumentException("Rating must be between 1 and 5");
+        }
+
         Conversation conversation = conversationRepository.findByIdAndOrganizationId(conversationId, organizationId)
                 .orElseThrow(() -> new ResourceNotFoundException("Conversation", conversationId));
 
         CsatSurvey survey = csatSurveyRepository.findByOrganizationIdAndConversationId(organizationId, conversationId)
-                .orElseGet(() -> {
-                    CsatSurvey newSurvey = CsatSurvey.builder()
-                            .conversation(conversation)
-                            .contact(conversation.getContact())
-                            .assignedUser(conversation.getAssignedUser())
-                            .status(CsatStatus.DISPATCHED)
-                            .dispatchedAt(Instant.now())
-                            .build();
-                    newSurvey.setOrganizationId(organizationId);
-                    return newSurvey;
-                });
+                .orElseThrow(() -> new ResourceNotFoundException("CsatSurvey for conversation", conversationId));
+
+        if (!survey.getOrganizationId().equals(organizationId)) {
+            throw new AccessDeniedException("Unauthorized cross-tenant CSAT response submission");
+        }
+
+        if (survey.getStatus() == CsatStatus.COMPLETED) {
+            throw new IllegalStateException("CSAT survey has already been completed");
+        }
+
+        if (survey.getStatus() != CsatStatus.DISPATCHED) {
+            throw new IllegalStateException("Cannot submit feedback for survey in status: " + survey.getStatus());
+        }
 
         survey.setRating(request.getRating());
         survey.setFeedbackText(request.getFeedbackText());
