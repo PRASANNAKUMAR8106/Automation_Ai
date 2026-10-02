@@ -2,7 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../contacts_crm/data/crm_repository.dart';
+import '../../contacts_crm/presentation/canned_response_dialog.dart';
+import '../../contacts_crm/presentation/collision_warning_banner.dart';
+import '../../contacts_crm/presentation/conversation_timeline_sheet.dart';
+import '../../contacts_crm/presentation/macro_runner_dialog.dart';
 import '../../contacts_crm/presentation/performance_telemetry_dialog.dart';
+import '../../crm/data/agent_productivity_repository.dart';
 import '../../knowledge/presentation/knowledge_base_dialog.dart';
 
 class InboxScreen extends ConsumerStatefulWidget {
@@ -16,6 +21,7 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
   int _selectedChatIndex = 0;
   final TextEditingController _replyController = TextEditingController();
   bool _useHumanAgentTag = false;
+  bool _isInternalNoteMode = false;
   AiSuggestionModel? _aiSuggestion;
   bool _isLoadingAiSuggestion = false;
 
@@ -130,6 +136,22 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
 
     final activeThread = _threads[_selectedChatIndex];
     final currentConvoId = activeThread['id'] as String? ?? 'conv-1';
+
+    if (_isInternalNoteMode) {
+      ref.read(agentProductivityRepositoryProvider).postInternalNote(currentConvoId, text);
+      setState(() {
+        final messages = activeThread['messages'] as List;
+        messages.add({
+          'sender': 'internal_note',
+          'text': text,
+          'time': 'Just now',
+        });
+        _replyController.clear();
+        _isInternalNoteMode = false;
+      });
+      return;
+    }
+
     final status = activeThread['windowStatus'] as String? ?? 'ACTIVE_24H';
 
     if (status == 'EXPIRED') {
@@ -355,18 +377,16 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
+                            Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: 8,
                               children: [
-                                Flexible(
-                                  child: Text(
-                                    activeThread['name'] as String,
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                                Text(
+                                  activeThread['name'] as String,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                if (isResolved) ...[
-                                  const SizedBox(width: 8),
+                                if (isResolved)
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                     decoration: BoxDecoration(
@@ -378,7 +398,6 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                                       style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
                                     ),
                                   ),
-                                ],
                               ],
                             ),
                             Text(
@@ -389,18 +408,24 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                           ],
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      _buildComplianceBadge(activeThread),
                       const SizedBox(width: 8),
+                      _buildComplianceBadge(activeThread),
+                      const SizedBox(width: 4),
                       IconButton(
                         key: const Key('knowledge_base_button'),
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
                         onPressed: () => KnowledgeBaseDialog.show(context),
                         icon: const Icon(Icons.menu_book_outlined, size: 20, color: AppTheme.primaryLight),
                         tooltip: 'Knowledge Base (RAG)',
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 4),
                       IconButton(
                         key: const Key('performance_telemetry_button'),
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
                         onPressed: () => showDialog(
                           context: context,
                           builder: (_) => const PerformanceTelemetryDialog(),
@@ -408,9 +433,46 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                         icon: const Icon(Icons.insights_rounded, size: 20, color: Colors.cyanAccent),
                         tooltip: 'SLA & Performance Telemetry',
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        key: const Key('macro_runner_button'),
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                        onPressed: () => showDialog(
+                          context: context,
+                          builder: (_) => MacroRunnerDialog(
+                            conversationId: activeThread['id'] as String? ?? 'conv-1',
+                            onMacroApplied: () {
+                              setState(() {});
+                            },
+                          ),
+                        ),
+                        icon: const Icon(Icons.bolt_rounded, size: 20, color: Colors.amberAccent),
+                        tooltip: 'Run Macro',
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        key: const Key('conversation_timeline_button'),
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                        onPressed: () => showDialog(
+                          context: context,
+                          builder: (_) => ConversationTimelineSheet(
+                            conversationId: activeThread['id'] as String? ?? 'conv-1',
+                          ),
+                        ),
+                        icon: const Icon(Icons.history_rounded, size: 20, color: Colors.lightGreenAccent),
+                        tooltip: 'Audit Timeline',
+                      ),
+                      const SizedBox(width: 4),
                       OutlinedButton.icon(
                         key: const Key('resolve_button'),
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        ),
                         onPressed: () async {
                           final newResolved = !isResolved;
                           final convoId = activeThread['id'] as String? ?? 'conv-1';
@@ -435,6 +497,11 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                   ),
                 ),
 
+                // Collision Detection Banner
+                CollisionWarningBanner(
+                  activeViewers: ref.watch(conversationPresenceProvider(activeThread['id'] as String? ?? 'conv-1')).value ?? [],
+                ),
+
                 // Message Transcript
                 Expanded(
                   child: ListView.builder(
@@ -442,6 +509,44 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                     itemCount: messages.length,
                     itemBuilder: (context, idx) {
                       final msg = messages[idx] as Map<String, dynamic>;
+                      final isInternal = msg['sender'] == 'internal_note';
+                      if (isInternal) {
+                        return Align(
+                          alignment: Alignment.center,
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(vertical: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            constraints: const BoxConstraints(maxWidth: 500),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.lock_rounded, size: 12, color: Colors.amber),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'Private Team Note (Hidden from Customer)',
+                                      style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  msg['text'] as String? ?? '',
+                                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
                       final isContact = msg['sender'] == 'contact';
 
                       return Align(
@@ -510,6 +615,56 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                                     )
                                   : const Icon(Icons.auto_awesome, size: 14),
                               label: Text(_isLoadingAiSuggestion ? 'Synthesizing...' : '✨ AI Co-Pilot Suggest'),
+                            ),
+                            const SizedBox(width: 8),
+                            OutlinedButton.icon(
+                              key: const Key('canned_responses_button'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.orangeAccent,
+                                side: const BorderSide(color: Colors.orangeAccent),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                              onPressed: () => showDialog(
+                                context: context,
+                                builder: (_) => CannedResponseDialog(
+                                  conversationId: activeThread['id'] as String? ?? 'conv-1',
+                                  onInsert: (text) {
+                                    setState(() {
+                                      _replyController.text = text;
+                                    });
+                                  },
+                                ),
+                              ),
+                              icon: const Icon(Icons.flash_on_rounded, size: 14),
+                              label: const Text('Canned (#)'),
+                            ),
+                            const SizedBox(width: 8),
+                            FilterChip(
+                              key: const Key('internal_note_toggle'),
+                              selected: _isInternalNoteMode,
+                              selectedColor: Colors.amber.withValues(alpha: 0.25),
+                              checkmarkColor: Colors.amber,
+                              label: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    _isInternalNoteMode ? Icons.lock_rounded : Icons.lock_open_rounded,
+                                    size: 13,
+                                    color: _isInternalNoteMode ? Colors.amber : AppTheme.textMuted,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'Internal Note',
+                                    style: TextStyle(
+                                      color: _isInternalNoteMode ? Colors.amber : AppTheme.textMuted,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              onSelected: (selected) => setState(() => _isInternalNoteMode = selected),
                             ),
                             if (activeThread['channel'] == 'INSTAGRAM') ...[
                               const SizedBox(width: 16),
@@ -662,9 +817,12 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                           Expanded(
                             child: TextField(
                               controller: _replyController,
-                              decoration: const InputDecoration(
-                                hintText: 'Type your message or response...',
-                                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              decoration: InputDecoration(
+                                hintText: _isInternalNoteMode
+                                    ? 'Add private team note / whisper (hidden from customer)...'
+                                    : 'Type your message or response...',
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                fillColor: _isInternalNoteMode ? Colors.amber.withValues(alpha: 0.08) : null,
                               ),
                               onChanged: (val) {
                                 final convoId = activeThread['id'] as String? ?? 'conv-1';
@@ -676,8 +834,11 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                           const SizedBox(width: 12),
                           ElevatedButton(
                             key: const Key('send_reply_button'),
+                            style: _isInternalNoteMode
+                                ? ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade700)
+                                : null,
                             onPressed: _sendReply,
-                            child: const Icon(Icons.send, size: 18),
+                            child: Icon(_isInternalNoteMode ? Icons.lock : Icons.send, size: 18),
                           ),
                         ],
                       ),

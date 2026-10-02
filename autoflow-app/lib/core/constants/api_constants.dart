@@ -52,6 +52,17 @@ class ApiConstants {
   static const String crmPerformanceAnalytics = '/api/v1/crm/analytics/performance';
   static String crmConversationCsat(String id) => '/api/v1/crm/conversations/$id/csat';
 
+  // Agent Productivity, Canned Responses, Collision, Macros & Timeline
+  static const String crmCannedResponses = '/api/v1/crm/canned-responses';
+  static String crmCannedResponse(String id) => '/api/v1/crm/canned-responses/$id';
+  static String crmInterpolateTemplate(String conversationId) => '/api/v1/crm/conversations/$conversationId/interpolate-template';
+  static String crmPresence(String conversationId) => '/api/v1/crm/conversations/$conversationId/presence';
+  static String crmNotes(String conversationId) => '/api/v1/crm/conversations/$conversationId/notes';
+  static const String crmMacros = '/api/v1/crm/macros';
+  static String crmMacro(String id) => '/api/v1/crm/macros/$id';
+  static String crmApplyMacro(String conversationId, String macroId) => '/api/v1/crm/conversations/$conversationId/apply-macro/$macroId';
+  static String crmTimeline(String conversationId) => '/api/v1/crm/conversations/$conversationId/timeline';
+
   // Knowledge Base (RAG)
   static const String knowledgeArticles = '/api/v1/knowledge/articles';
   static String knowledgeArticle(String id) => '/api/v1/knowledge/articles/$id';

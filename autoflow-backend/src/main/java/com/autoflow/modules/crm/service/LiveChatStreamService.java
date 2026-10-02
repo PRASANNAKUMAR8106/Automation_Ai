@@ -50,4 +50,22 @@ public interface LiveChatStreamService {
      * @param isResolved Resolution state
      */
     void broadcastConversationResolved(UUID organizationId, UUID conversationId, boolean isResolved);
+
+    /**
+     * Broadcasts active agent presence list (collision detection) for a conversation.
+     *
+     * @param organizationId Tenant ID
+     * @param conversationId Conversation ID
+     * @param activeViewers List of agents currently viewing or typing in thread
+     */
+    void broadcastAgentPresence(UUID organizationId, UUID conversationId, java.util.List<com.autoflow.modules.crm.dto.AgentProductivityDto.AgentPresenceDto> activeViewers);
+
+    /**
+     * Broadcasts a new internal note or supervisor whisper within the team.
+     *
+     * @param organizationId Tenant ID
+     * @param conversationId Conversation ID
+     * @param note Internal note payload
+     */
+    void broadcastInternalNote(UUID organizationId, UUID conversationId, com.autoflow.modules.crm.dto.AgentProductivityDto.InternalNoteResponse note);
 }

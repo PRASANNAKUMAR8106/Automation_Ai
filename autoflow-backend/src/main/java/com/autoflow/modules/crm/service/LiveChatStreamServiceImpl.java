@@ -190,6 +190,47 @@ public class LiveChatStreamServiceImpl implements LiveChatStreamService {
         }
     }
 
+    @Override
+    public void broadcastAgentPresence(UUID organizationId, UUID conversationId, List<com.autoflow.modules.crm.dto.AgentProductivityDto.AgentPresenceDto> activeViewers) {
+        List<SseEmitter> convSubscribers = conversationEmitters.get(conversationId);
+        if (convSubscribers != null && !convSubscribers.isEmpty()) {
+            Map<String, Object> presenceEvent = Map.of(
+                    "conversationId", conversationId.toString(),
+                    "activeViewers", activeViewers
+            );
+            for (SseEmitter emitter : convSubscribers) {
+                if (organizationId.equals(emitterTenantMap.get(emitter))) {
+                    try {
+                        emitter.send(SseEmitter.event()
+                                .name("agent_presence")
+                                .data(presenceEvent));
+                    } catch (Exception e) {
+                        removeConversationEmitter(conversationId, emitter);
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public void broadcastInternalNote(UUID organizationId, UUID conversationId, com.autoflow.modules.crm.dto.AgentProductivityDto.InternalNoteResponse note) {
+        List<SseEmitter> convSubscribers = conversationEmitters.get(conversationId);
+        if (convSubscribers != null && !convSubscribers.isEmpty()) {
+            for (SseEmitter emitter : convSubscribers) {
+                if (organizationId.equals(emitterTenantMap.get(emitter))) {
+                    try {
+                        emitter.send(SseEmitter.event()
+                                .name("internal_note")
+                                .id(note.getId().toString())
+                                .data(note));
+                    } catch (Exception e) {
+                        removeConversationEmitter(conversationId, emitter);
+                    }
+                }
+            }
+        }
+    }
+
     @Scheduled(fixedRate = 25000)
     public void sendHeartbeats() {
         // Send ping to conversation emitters
