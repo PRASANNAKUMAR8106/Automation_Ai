@@ -4,6 +4,7 @@ import com.autoflow.common.exceptions.ResourceNotFoundException;
 import com.autoflow.modules.knowledge.dto.KnowledgeDto.*;
 import com.autoflow.modules.knowledge.entity.KnowledgeArticle;
 import com.autoflow.modules.knowledge.entity.KnowledgeCategory;
+import com.autoflow.modules.knowledge.entity.KnowledgeChunk;
 import com.autoflow.modules.knowledge.repository.KnowledgeArticleRepository;
 import com.autoflow.modules.knowledge.repository.KnowledgeChunkRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -193,5 +194,101 @@ class KnowledgeArticleServiceTest {
         when(articleRepository.findByIdAndOrganizationId(articleId, testOrgId)).thenReturn(Optional.empty());
 
         assertThrows(ResourceNotFoundException.class, () -> articleService.getArticle(testOrgId, articleId));
+    }
+
+    @Test
+    @DisplayName("Semantic retrieval with different wording successfully retrieves relevant article without keyword overlap")
+    void shouldPerformSemanticRetrievalWithDifferentWordingWithoutKeywordOverlap() {
+        com.autoflow.modules.ai.service.EmbeddingService realEmbeddingService = new com.autoflow.modules.ai.service.EmbeddingService();
+        KnowledgeArticleServiceImpl realService = new KnowledgeArticleServiceImpl(articleRepository, chunkRepository, realEmbeddingService);
+
+        UUID refundId = UUID.randomUUID();
+        KnowledgeArticle refundArticle = KnowledgeArticle.builder()
+                .title("Financial Reimbursement & Policy")
+                .category(KnowledgeCategory.POLICY)
+                .content("We offer full compensation and guarantee for customers seeking their money back.")
+                .tags(List.of("reimbursement", "compensation", "guarantee"))
+                .active(true)
+                .usageCount(0)
+                .build();
+        refundArticle.setId(refundId);
+        refundArticle.setOrganizationId(testOrgId);
+
+        UUID reelId = UUID.randomUUID();
+        KnowledgeArticle reelArticle = KnowledgeArticle.builder()
+                .title("Instagram Reel Workflow Setup")
+                .category(KnowledgeCategory.PRODUCT_SPECS)
+                .content("Configure video triggers to automatically dispatch direct messages on post comments.")
+                .tags(List.of("instagram", "workflow", "automation"))
+                .active(true)
+                .usageCount(0)
+                .build();
+        reelArticle.setId(reelId);
+        reelArticle.setOrganizationId(testOrgId);
+
+        when(articleRepository.findAllByOrganizationIdAndActiveTrue(testOrgId))
+                .thenReturn(List.of(reelArticle, refundArticle));
+
+        float[] refundVec = realEmbeddingService.generateEmbedding(refundArticle.getContent());
+        KnowledgeChunk refundChunk = KnowledgeChunk.builder()
+                .article(refundArticle)
+                .chunkIndex(0)
+                .content(refundArticle.getContent())
+                .embedding(realEmbeddingService.serializeVector(refundVec))
+                .build();
+        refundChunk.setOrganizationId(testOrgId);
+
+        float[] reelVec = realEmbeddingService.generateEmbedding(reelArticle.getContent());
+        KnowledgeChunk reelChunk = KnowledgeChunk.builder()
+                .article(reelArticle)
+                .chunkIndex(0)
+                .content(reelArticle.getContent())
+                .embedding(realEmbeddingService.serializeVector(reelVec))
+                .build();
+        reelChunk.setOrganizationId(testOrgId);
+
+        when(chunkRepository.findAllByOrganizationId(testOrgId)).thenReturn(List.of(reelChunk, refundChunk));
+
+        // Query with different wording: "Can I get my cash returned if I cancel?"
+        // Proves dense semantic vector retrieval over pure keyword matching
+        List<ArticleResponse> results = realService.findRelevantArticles(testOrgId, "Can I get my cash returned if I cancel?", 2);
+
+        assertFalse(results.isEmpty());
+        assertEquals("Financial Reimbursement & Policy", results.get(0).getTitle(),
+                "Semantic embedding must rank financial reimbursement first based on semantic concept resonance");
+        assertNotNull(results.get(0).getCitationSnippet());
+    }
+
+    @Test
+    @DisplayName("Updating an article invalidates old chunk embeddings and prevents stale retrieval")
+    void shouldInvalidateAndRebuildOldEmbeddingsOnArticleUpdateAndPreventStaleRetrieval() {
+        UUID articleId = UUID.randomUUID();
+        KnowledgeArticle article = KnowledgeArticle.builder()
+                .title("Cancellation Policy")
+                .category(KnowledgeCategory.POLICY)
+                .content("Version 1: 30 calendar days allowed for returns.")
+                .active(true)
+                .build();
+        article.setId(articleId);
+        article.setOrganizationId(testOrgId);
+
+        when(articleRepository.findByIdAndOrganizationId(articleId, testOrgId)).thenReturn(Optional.of(article));
+        when(articleRepository.save(any(KnowledgeArticle.class))).thenAnswer(i -> i.getArgument(0));
+        when(embeddingService.chunkText(anyString(), anyInt(), anyInt()))
+                .thenReturn(List.of("Version 2: Strictly 14 days allowed for returns."));
+        when(embeddingService.generateEmbedding(anyString())).thenReturn(new float[1536]);
+        when(embeddingService.serializeVector(any())).thenReturn("[0.0, 0.0]");
+
+        UpdateArticleRequest updateReq = UpdateArticleRequest.builder()
+                .content("Version 2: Strictly 14 days allowed for returns. 30 days is no longer valid.")
+                .build();
+
+        articleService.updateArticle(testOrgId, articleId, updateReq);
+
+        // Verify that old chunk embeddings were explicitly deleted
+        verify(chunkRepository).deleteByArticleId(articleId);
+
+        // Verify that new chunks with updated content were saved
+        verify(chunkRepository, atLeastOnce()).save(any(com.autoflow.modules.knowledge.entity.KnowledgeChunk.class));
     }
 }

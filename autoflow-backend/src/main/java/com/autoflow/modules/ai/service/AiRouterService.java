@@ -57,13 +57,17 @@ public class AiRouterService {
             }
         }
 
-        // Fallback sequence: Gemini -> OpenAI -> Anthropic -> Mock
-        List<AiProviderType> fallbackOrder = List.of(
+        // Fallback sequence across production LLM providers: Gemini -> OpenAI -> Anthropic
+        List<AiProviderType> fallbackOrder = new java.util.ArrayList<>(List.of(
                 AiProviderType.GEMINI,
                 AiProviderType.OPENAI,
-                AiProviderType.ANTHROPIC,
-                AiProviderType.MOCK
-        );
+                AiProviderType.ANTHROPIC
+        ));
+
+        // Mock client is ONLY permitted in dev/test when allowMockFallback is explicitly enabled
+        if (properties.isAllowMockFallback()) {
+            fallbackOrder.add(AiProviderType.MOCK);
+        }
 
         for (AiProviderType fallback : fallbackOrder) {
             if (fallback == preferred) continue; // Already tried
@@ -78,13 +82,17 @@ public class AiRouterService {
             }
         }
 
-        // Guaranteed fallback to mock if all else fails
-        AiClient mockClient = clientMap.get(AiProviderType.MOCK);
-        if (mockClient != null) {
-            return mockClient.generateReply(personaPrompt, incomingMessage);
+        // Guaranteed fallback to mock ONLY if explicitly allowed by configuration (e.g. local dev / test)
+        if (properties.isAllowMockFallback()) {
+            AiClient mockClient = clientMap.get(AiProviderType.MOCK);
+            if (mockClient != null) {
+                log.warn("All upstream AI providers failed. Using MockAiClient as permitted by configuration.");
+                return mockClient.generateReply(personaPrompt, incomingMessage);
+            }
         }
 
-        throw new IllegalStateException("All configured AI providers failed and no mock fallback was registered");
+        log.error("All configured production AI providers failed and mock fallback is prohibited in production.");
+        throw new IllegalStateException("All configured production AI providers failed and mock fallback is prohibited in production");
     }
 
     public String getActiveModel(AiProviderType providerType) {

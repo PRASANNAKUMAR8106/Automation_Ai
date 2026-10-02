@@ -131,6 +131,8 @@ public class AiCopilotServiceImpl implements AiCopilotService {
         } catch (Exception e) {
             log.error("Failed to generate AI suggestion via router: {}", e.getMessage(), e);
             suggestedReply = "Hi " + contactName + ", thank you for reaching out! Let me connect you with a team member who can help you right away.";
+            requiresHuman = true;
+            escalationReason = "Automated AI generation unavailable. Human agent review required.";
         }
 
         double confidence = relevantArticles.isEmpty() ? 0.70 : 0.94;

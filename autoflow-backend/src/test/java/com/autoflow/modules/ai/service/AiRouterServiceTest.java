@@ -67,15 +67,29 @@ class AiRouterServiceTest {
     }
 
     @Test
-    @DisplayName("When all external providers fail, router falls back to MockAiClient with zero downtime")
-    void testFallbackToMockClient() {
+    @DisplayName("When all external providers fail and allowMockFallback is true (dev/test), router falls back to MockAiClient")
+    void testFallbackToMockClientWhenAllowed() {
         properties.setDefaultProvider(AiProviderType.OPENAI);
+        properties.setAllowMockFallback(true);
         when(openAiClient.isAvailable()).thenReturn(false);
         when(geminiClient.isAvailable()).thenReturn(false);
 
         String reply = routerService.generateSocialReply("System", "What is the price of starter plan?");
         assertNotNull(reply);
         assertTrue(reply.contains("₹1,499"));
+    }
+
+    @Test
+    @DisplayName("In production (allowMockFallback is false), router strictly prohibits Mock fallback and throws IllegalStateException")
+    void testProductionProhibitsMockFallback() {
+        properties.setDefaultProvider(AiProviderType.OPENAI);
+        properties.setAllowMockFallback(false);
+        when(openAiClient.isAvailable()).thenReturn(false);
+        when(geminiClient.isAvailable()).thenReturn(false);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
+                routerService.generateSocialReply("System", "What is the price of starter plan?"));
+        assertTrue(ex.getMessage().contains("mock fallback is prohibited in production"));
     }
 
     @Test
