@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
@@ -46,7 +47,8 @@ public class AgentProductivityController {
             @RequestParam(required = false) String search
     ) {
         UUID organizationId = TenantContext.getRequiredTenantId();
-        List<CannedResponse> snippets = cannedResponseService.getCannedResponses(organizationId, category, search);
+        UUID userId = getCurrentUserId();
+        List<CannedResponse> snippets = cannedResponseService.getCannedResponses(organizationId, userId, category, search);
         List<CannedResponseResponse> response = snippets.stream().map(this::toResponse).toList();
         return ResponseEntity.ok(ApiResponse.ok("Canned responses retrieved", response));
     }
@@ -147,13 +149,16 @@ public class AgentProductivityController {
     @Operation(summary = "Get Internal Notes", description = "Fetches team internal notes and supervisor whispers for a conversation")
     public ResponseEntity<ApiResponse<List<InternalNoteResponse>>> getInternalNotes(@PathVariable UUID id) {
         UUID organizationId = TenantContext.getRequiredTenantId();
-        List<InternalNoteResponse> notes = internalNoteService.getInternalNotes(organizationId, id);
+        UUID userId = getCurrentUserId();
+        boolean isSupervisor = isCurrentUserSupervisorOrAdmin();
+        List<InternalNoteResponse> notes = internalNoteService.getInternalNotes(organizationId, id, userId, isSupervisor);
         return ResponseEntity.ok(ApiResponse.ok("Internal notes retrieved", notes));
     }
 
     // --- 4. CRM MACROS ---
 
     @GetMapping("/macros")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN', 'SUPPORT')")
     @Operation(summary = "List Macros", description = "Lists all multi-action macros available for the organization")
     public ResponseEntity<ApiResponse<List<CrmMacroResponse>>> getMacros() {
         UUID organizationId = TenantContext.getRequiredTenantId();
@@ -163,6 +168,7 @@ public class AgentProductivityController {
     }
 
     @PostMapping("/macros")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     @Operation(summary = "Create Macro", description = "Creates a new multi-action macro template")
     public ResponseEntity<ApiResponse<CrmMacroResponse>> createMacro(
             @Valid @RequestBody CrmMacroRequest request
@@ -173,7 +179,20 @@ public class AgentProductivityController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok("Macro created", toMacroResponse(created)));
     }
 
+    @PutMapping("/macros/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    @Operation(summary = "Update Macro", description = "Updates an existing macro template")
+    public ResponseEntity<ApiResponse<CrmMacroResponse>> updateMacro(
+            @PathVariable UUID id,
+            @Valid @RequestBody CrmMacroRequest request
+    ) {
+        UUID organizationId = TenantContext.getRequiredTenantId();
+        CrmMacro updated = macroExecutionService.updateMacro(organizationId, id, request);
+        return ResponseEntity.ok(ApiResponse.ok("Macro updated", toMacroResponse(updated)));
+    }
+
     @DeleteMapping("/macros/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     @Operation(summary = "Delete Macro", description = "Deletes a macro template")
     public ResponseEntity<ApiResponse<Void>> deleteMacro(@PathVariable UUID id) {
         UUID organizationId = TenantContext.getRequiredTenantId();
@@ -182,6 +201,7 @@ public class AgentProductivityController {
     }
 
     @PostMapping("/conversations/{id}/apply-macro/{macroId}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN', 'SUPPORT')")
     @Operation(summary = "Apply Macro to Conversation", description = "Atomically executes macro actions against conversation and contact")
     public ResponseEntity<ApiResponse<ApplyMacroResult>> applyMacro(
             @PathVariable UUID id,
@@ -249,5 +269,26 @@ public class AgentProductivityController {
             return auth.getName();
         }
         return "agent@autoflow.ai";
+    }
+
+    private boolean isCurrentUserSupervisorOrAdmin() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getAuthorities() != null) {
+            boolean hasAdminRole = auth.getAuthorities().stream().anyMatch(a ->
+                    a.getAuthority().equals("ROLE_ADMIN") ||
+                    a.getAuthority().equals("ROLE_SUPER_ADMIN") ||
+                    a.getAuthority().equals("ADMIN") ||
+                    a.getAuthority().equals("SUPER_ADMIN")
+            );
+            if (hasAdminRole) return true;
+        }
+        if (auth != null && auth.getName() != null && !auth.getName().equalsIgnoreCase("anonymousUser")) {
+            Optional<User> user = userRepository.findByEmailIgnoreCase(auth.getName());
+            if (user.isPresent()) {
+                com.autoflow.modules.user.entity.Role r = user.get().getRole();
+                return r == com.autoflow.modules.user.entity.Role.ADMIN || r == com.autoflow.modules.user.entity.Role.SUPER_ADMIN;
+            }
+        }
+        return false;
     }
 }

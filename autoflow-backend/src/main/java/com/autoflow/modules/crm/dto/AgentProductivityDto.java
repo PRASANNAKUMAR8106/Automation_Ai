@@ -175,5 +175,7 @@ public class AgentProductivityDto {
         private String actor;
         private Instant timestamp;
         private Map<String, Object> metadata;
+        private String auditChecksum;
+        private boolean immutableAudit;
     }
 }

@@ -311,6 +311,10 @@ public class InstagramChannelProvider implements SocialChannelProvider {
     }
 
     public String sendPrivateDirectMessage(String pageAccessToken, String recipientId, String messageText) {
+        if (messageText != null && (messageText.startsWith("[INTERNAL_NOTE]") || messageText.startsWith("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to Instagram");
+        }
+
         if (isMockMode()) {
             log.info("Mock mode active; simulating DM to {} with text: {}", recipientId, messageText);
             return "mock_msg_id_" + System.currentTimeMillis();

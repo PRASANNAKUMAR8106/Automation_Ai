@@ -91,7 +91,7 @@ class AgentProductivityControllerTest {
                 .build();
         snippet.setId(UUID.randomUUID());
 
-        when(cannedResponseService.getCannedResponses(eq(testOrgId), any(), any()))
+        when(cannedResponseService.getCannedResponses(eq(testOrgId), any(), any(), any()))
                 .thenReturn(List.of(snippet));
 
         mockMvc.perform(get("/api/v1/crm/canned-responses"))

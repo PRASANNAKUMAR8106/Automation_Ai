@@ -13,7 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -92,6 +94,22 @@ public class CannedResponseServiceImpl implements CannedResponseService {
     @Override
     @Transactional(readOnly = true)
     public List<CannedResponse> getCannedResponses(UUID organizationId, String category, String search) {
+        return getCannedResponses(organizationId, null, category, search);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CannedResponse> getCannedResponses(UUID organizationId, UUID userId, String category, String search) {
+        if (userId != null) {
+            if (search != null && !search.trim().isEmpty()) {
+                return cannedResponseRepository.searchVisibleToUser(organizationId, userId, search.trim());
+            }
+            if (category != null && !category.trim().isEmpty() && !category.equalsIgnoreCase("ALL")) {
+                return cannedResponseRepository.findVisibleToUserByCategory(organizationId, userId, category.trim().toUpperCase());
+            }
+            return cannedResponseRepository.findVisibleToUser(organizationId, userId);
+        }
+
         if (search != null && !search.trim().isEmpty()) {
             return cannedResponseRepository.searchByKeyword(organizationId, search.trim());
         }
@@ -100,6 +118,8 @@ public class CannedResponseServiceImpl implements CannedResponseService {
         }
         return cannedResponseRepository.findByOrganizationIdOrderByShortcutAsc(organizationId);
     }
+
+    private static final java.util.regex.Pattern TOKEN_PATTERN = java.util.regex.Pattern.compile("\\{\\{([a-zA-Z0-9_.]+)\\}\\}");
 
     @Override
     @Transactional(readOnly = true)
@@ -114,14 +134,22 @@ public class CannedResponseServiceImpl implements CannedResponseService {
         Contact contact = conversation.getContact();
         String contactName = "Customer";
         String contactUsername = "Customer";
+        String contactFirstName = "Customer";
+        String contactLastName = "";
         String contactEmail = "";
         String contactPhone = "";
 
         if (contact != null) {
             if (contact.getFullName() != null && !contact.getFullName().isBlank()) {
                 contactName = contact.getFullName().trim();
+                String[] parts = contactName.split("\\s+", 2);
+                contactFirstName = parts[0];
+                if (parts.length > 1) {
+                    contactLastName = parts[1];
+                }
             } else if (contact.getUsername() != null && !contact.getUsername().isBlank()) {
                 contactName = contact.getUsername().trim();
+                contactFirstName = contactName;
             }
             if (contact.getUsername() != null) {
                 contactUsername = contact.getUsername().trim();
@@ -137,14 +165,31 @@ public class CannedResponseServiceImpl implements CannedResponseService {
         String resolvedAgent = (agentName != null && !agentName.isBlank()) ? agentName.trim() : "Support Team";
         String resolvedChannel = conversation.getChannel() != null ? conversation.getChannel().name() : "CHAT";
 
-        return rawContent
-                .replace("{{contact.name}}", contactName)
-                .replace("{{contact.username}}", contactUsername)
-                .replace("{{contact.email}}", contactEmail)
-                .replace("{{contact.phone}}", contactPhone)
-                .replace("{{agent.name}}", resolvedAgent)
-                .replace("{{channel}}", resolvedChannel)
-                .replace("{{organization.name}}", "AutoFlow");
+        // Whitelisted dynamic properties - strictly prevents property traversal or sensitive data access
+        Map<String, String> whitelist = new HashMap<>();
+        whitelist.put("contact.name", contactName);
+        whitelist.put("contact.username", contactUsername);
+        whitelist.put("contact.firstname", contactFirstName);
+        whitelist.put("contact.lastname", contactLastName);
+        whitelist.put("contact.email", contactEmail);
+        whitelist.put("contact.phone", contactPhone);
+        whitelist.put("agent.name", resolvedAgent);
+        whitelist.put("channel", resolvedChannel);
+        whitelist.put("organization.name", "AutoFlow");
+
+        java.util.regex.Matcher matcher = TOKEN_PATTERN.matcher(rawContent);
+        StringBuilder sb = new StringBuilder();
+        while (matcher.find()) {
+            String tokenKey = matcher.group(1).toLowerCase().trim();
+            if (whitelist.containsKey(tokenKey)) {
+                matcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(whitelist.get(tokenKey)));
+            } else {
+                // Non-whitelisted variable: safely drop/ignore without reflection or execution
+                matcher.appendReplacement(sb, "");
+            }
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
     }
 
     @Override

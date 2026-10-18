@@ -37,4 +37,20 @@ public class SocialChannelProviderRegistry {
     public boolean supports(ChannelType channelType) {
         return providers.containsKey(channelType);
     }
+
+    /**
+     * Strict multi-layer firewall enforcement:
+     * Guarantees that internal notes and supervisor whispers NEVER reach external social providers.
+     */
+    public void assertPermittedOutboundMessage(String messageType, String content) {
+        if (messageType != null) {
+            String upper = messageType.trim().toUpperCase();
+            if (upper.contains("INTERNAL_NOTE") || upper.contains("SUPERVISOR_WHISPER") || upper.contains("WHISPER")) {
+                throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to external social providers! Blocked messageType: " + messageType);
+            }
+        }
+        if (content != null && (content.startsWith("[INTERNAL_NOTE]") || content.startsWith("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Content tagged as internal note or whisper cannot be dispatched to external social providers!");
+        }
+    }
 }

@@ -11,6 +11,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.*;
 
 @Slf4j
@@ -41,6 +44,9 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
             meta.put("messageType", m.getMessageType());
             meta.put("deliveryStatus", m.getDeliveryStatus());
             if (m.getMediaUrl() != null) meta.put("mediaUrl", m.getMediaUrl());
+            attachAuditLedger(meta, organizationId, conversationId, m.getSentAt());
+
+            String checksum = computeAuditChecksum(organizationId, conversationId, m.getId(), "MESSAGE", m.getDirection(), m.getSentAt());
 
             events.add(TimelineEventDto.builder()
                     .id(m.getId())
@@ -50,6 +56,8 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
                     .actor(m.getSenderType())
                     .timestamp(m.getSentAt())
                     .metadata(meta)
+                    .auditChecksum(checksum)
+                    .immutableAudit(true)
                     .build());
         }
 
@@ -59,6 +67,9 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
         for (ConversationInternalNote n : notes) {
             Map<String, Object> meta = new HashMap<>();
             if (n.getAuthorUserId() != null) meta.put("authorUserId", n.getAuthorUserId().toString());
+            attachAuditLedger(meta, organizationId, conversationId, n.getCreatedAt());
+
+            String checksum = computeAuditChecksum(organizationId, conversationId, n.getId(), "INTERNAL_NOTE", n.getNoteType(), n.getCreatedAt());
 
             events.add(TimelineEventDto.builder()
                     .id(n.getId())
@@ -68,6 +79,8 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
                     .actor(n.getAuthorEmail() != null ? n.getAuthorEmail() : "Team Member")
                     .timestamp(n.getCreatedAt())
                     .metadata(meta)
+                    .auditChecksum(checksum)
+                    .immutableAudit(true)
                     .build());
         }
 
@@ -80,15 +93,21 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
             if (se.getAssignedUser() != null) meta.put("assignedUser", se.getAssignedUser().getEmail());
             if (se.getPreviousUser() != null) meta.put("previousUser", se.getPreviousUser().getEmail());
             if (se.getEscalatedToUser() != null) meta.put("escalatedToUser", se.getEscalatedToUser().getEmail());
+            attachAuditLedger(meta, organizationId, conversationId, se.getCreatedAt());
+
+            String eventTypeStr = se.getEventType() != null ? se.getEventType().name() : "EVENT";
+            String checksum = computeAuditChecksum(organizationId, conversationId, se.getId(), "SLA_EVENT", eventTypeStr, se.getCreatedAt());
 
             events.add(TimelineEventDto.builder()
                     .id(se.getId())
                     .category("SLA_EVENT")
-                    .eventType(se.getEventType() != null ? se.getEventType().name() : "EVENT")
-                    .summary(se.getReason() != null ? se.getReason() : se.getEventType().name())
+                    .eventType(eventTypeStr)
+                    .summary(se.getReason() != null ? se.getReason() : eventTypeStr)
                     .actor("SYSTEM")
                     .timestamp(se.getCreatedAt())
                     .metadata(meta)
+                    .auditChecksum(checksum)
+                    .immutableAudit(true)
                     .build());
         }
 
@@ -100,19 +119,26 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
             meta.put("status", csat.getStatus() != null ? csat.getStatus().name() : "");
             if (csat.getRating() != null) meta.put("rating", csat.getRating());
             if (csat.getFeedbackText() != null) meta.put("feedback", csat.getFeedbackText());
+            Instant csatTs = csat.getRespondedAt() != null ? csat.getRespondedAt() : csat.getCreatedAt();
+            attachAuditLedger(meta, organizationId, conversationId, csatTs);
 
             String summary = csat.getRating() != null
                     ? "CSAT Rating: " + csat.getRating() + "/5" + (csat.getFeedbackText() != null ? " - \"" + csat.getFeedbackText() + "\"" : "")
                     : "CSAT Survey Dispatched";
 
+            String eventTypeStr = csat.getStatus() != null ? csat.getStatus().name() : "CSAT";
+            String checksum = computeAuditChecksum(organizationId, conversationId, csat.getId(), "CSAT", eventTypeStr, csatTs);
+
             events.add(TimelineEventDto.builder()
                     .id(csat.getId())
                     .category("CSAT")
-                    .eventType(csat.getStatus() != null ? csat.getStatus().name() : "CSAT")
+                    .eventType(eventTypeStr)
                     .summary(summary)
                     .actor("CUSTOMER")
-                    .timestamp(csat.getRespondedAt() != null ? csat.getRespondedAt() : csat.getCreatedAt())
+                    .timestamp(csatTs)
                     .metadata(meta)
+                    .auditChecksum(checksum)
+                    .immutableAudit(true)
                     .build());
         }
 
@@ -124,9 +150,12 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
             meta.put("previousScore", audit.getPreviousScore());
             meta.put("newScore", audit.getNewScore());
             meta.put("delta", audit.getScoreDelta());
+            attachAuditLedger(meta, organizationId, conversationId, audit.getCreatedAt());
 
             String sign = audit.getScoreDelta() > 0 ? "+" : "";
             String summary = audit.getReason() + " (Delta: " + sign + audit.getScoreDelta() + ", New: " + audit.getNewScore() + ")";
+
+            String checksum = computeAuditChecksum(organizationId, conversationId, audit.getId(), "LEAD_SCORE", "SCORE_UPDATE", audit.getCreatedAt());
 
             events.add(TimelineEventDto.builder()
                     .id(audit.getId())
@@ -136,6 +165,8 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
                     .actor("SYSTEM")
                     .timestamp(audit.getCreatedAt())
                     .metadata(meta)
+                    .auditChecksum(checksum)
+                    .immutableAudit(true)
                     .build());
         }
 
@@ -143,5 +174,29 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
         events.sort(Comparator.comparing(TimelineEventDto::getTimestamp, Comparator.nullsLast(Comparator.naturalOrder())));
 
         return events;
+    }
+
+    private void attachAuditLedger(Map<String, Object> meta, UUID organizationId, UUID conversationId, Instant ts) {
+        meta.put("auditLedger", Map.of(
+                "tenantId", organizationId.toString(),
+                "conversationId", conversationId.toString(),
+                "recordedAt", ts != null ? ts.toString() : Instant.now().toString(),
+                "immutable", true
+        ));
+    }
+
+    private String computeAuditChecksum(UUID orgId, UUID convId, UUID eventId, String category, String eventType, Instant ts) {
+        try {
+            String raw = orgId + ":" + convId + ":" + eventId + ":" + category + ":" + eventType + ":" + (ts != null ? ts.toEpochMilli() : 0);
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            return "sha256:fallback:" + UUID.randomUUID();
+        }
     }
 }

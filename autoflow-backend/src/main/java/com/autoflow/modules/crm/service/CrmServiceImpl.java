@@ -292,6 +292,11 @@ public class CrmServiceImpl implements CrmService {
         // Validate Meta / WhatsApp 24-hour compliance
         messagingWindowService.validateCanSend(conversation, humanAgentTag);
 
+        // Multi-layer firewall check: guarantee internal notes and whispers NEVER reach external channels
+        if (content != null && (content.startsWith("[INTERNAL_NOTE]") || content.startsWith("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to external channels");
+        }
+
         Contact contact = conversation.getContact();
         ChannelType channel = conversation.getChannel();
         String recipientId = contact.getExternalId();

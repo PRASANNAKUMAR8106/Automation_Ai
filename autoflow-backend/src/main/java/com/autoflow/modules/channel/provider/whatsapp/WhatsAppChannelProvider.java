@@ -240,6 +240,10 @@ public class WhatsAppChannelProvider implements SocialChannelProvider {
      * Dispatches a WhatsApp text message via Cloud API.
      */
     public String sendMessage(String accessToken, String recipientPhone, String messageText) {
+        if (messageText != null && (messageText.startsWith("[INTERNAL_NOTE]") || messageText.startsWith("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to WhatsApp");
+        }
+
         if (isMockMode()) {
             log.info("Mock mode: simulating WhatsApp message to {} : {}", recipientPhone, messageText);
             return "mock_wa_msg_" + System.currentTimeMillis();

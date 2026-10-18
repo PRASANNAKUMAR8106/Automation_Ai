@@ -26,9 +26,21 @@ public interface CannedResponseRepository extends JpaRepository<CannedResponse, 
     @Query("UPDATE CannedResponse c SET c.usageCount = c.usageCount + 1 WHERE c.id = :id AND c.organizationId = :organizationId")
     void incrementUsageCount(@Param("id") UUID id, @Param("organizationId") UUID organizationId);
 
+    @Query("SELECT c FROM CannedResponse c WHERE c.organizationId = :organizationId AND (c.isShared = true OR c.createdByUserId = :userId) ORDER BY c.shortcut ASC")
+    List<CannedResponse> findVisibleToUser(@Param("organizationId") UUID organizationId, @Param("userId") UUID userId);
+
+    @Query("SELECT c FROM CannedResponse c WHERE c.organizationId = :organizationId AND (c.isShared = true OR c.createdByUserId = :userId) AND c.category = :category ORDER BY c.shortcut ASC")
+    List<CannedResponse> findVisibleToUserByCategory(@Param("organizationId") UUID organizationId, @Param("userId") UUID userId, @Param("category") String category);
+
     @Query("SELECT c FROM CannedResponse c WHERE c.organizationId = :organizationId AND " +
            "(LOWER(c.shortcut) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(c.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(c.content) LIKE LOWER(CONCAT('%', :keyword, '%')))")
     List<CannedResponse> searchByKeyword(@Param("organizationId") UUID organizationId, @Param("keyword") String keyword);
+
+    @Query("SELECT c FROM CannedResponse c WHERE c.organizationId = :organizationId AND (c.isShared = true OR c.createdByUserId = :userId) AND " +
+           "(LOWER(c.shortcut) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
+           "LOWER(c.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
+           "LOWER(c.content) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+    List<CannedResponse> searchVisibleToUser(@Param("organizationId") UUID organizationId, @Param("userId") UUID userId, @Param("keyword") String keyword);
 }

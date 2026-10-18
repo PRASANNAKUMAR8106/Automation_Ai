@@ -38,6 +38,8 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
     @Override
     @Transactional
     public CrmMacro createMacro(UUID organizationId, UUID userId, CrmMacroRequest request) {
+        MacroActionValidator.validate(request.getActionsJson(), objectMapper);
+
         CrmMacro macro = CrmMacro.builder()
                 .name(request.getName().trim())
                 .description(request.getDescription())
@@ -51,6 +53,8 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
     @Override
     @Transactional
     public CrmMacro updateMacro(UUID organizationId, UUID id, CrmMacroRequest request) {
+        MacroActionValidator.validate(request.getActionsJson(), objectMapper);
+
         CrmMacro macro = crmMacroRepository.findByIdAndOrganizationId(id, organizationId)
                 .orElseThrow(() -> new ResourceNotFoundException("CrmMacro", id));
 
@@ -80,6 +84,8 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
     public ApplyMacroResult applyMacro(UUID organizationId, UUID conversationId, UUID macroId, UUID executingUserId, String agentName) {
         CrmMacro macro = crmMacroRepository.findByIdAndOrganizationId(macroId, organizationId)
                 .orElseThrow(() -> new ResourceNotFoundException("CrmMacro", macroId));
+
+        MacroActionValidator.validate(macro.getActionsJson(), objectMapper);
 
         Conversation conversation = conversationRepository.findByIdAndOrganizationId(conversationId, organizationId)
                 .orElseThrow(() -> new ResourceNotFoundException("Conversation", conversationId));
@@ -120,9 +126,14 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
                             }
 
                             String interpolated = cannedResponseService.interpolateTemplate(organizationId, conversationId, rawContent, agentName);
-                            crmService.sendAgentReply(organizationId, conversationId, interpolated, null, false);
-                            outboundSnippet = interpolated;
-                            actionsExecuted.add("SEND_REPLY: " + (interpolated.length() > 30 ? interpolated.substring(0, 30) + "..." : interpolated));
+                            try {
+                                crmService.sendAgentReply(organizationId, conversationId, interpolated, null, false);
+                                outboundSnippet = interpolated;
+                                actionsExecuted.add("SEND_REPLY: " + (interpolated.length() > 30 ? interpolated.substring(0, 30) + "..." : interpolated));
+                            } catch (Exception dispatchEx) {
+                                log.warn("Macro [{}] SEND_REPLY external dispatch failed: {}", macro.getName(), dispatchEx.getMessage());
+                                actionsExecuted.add("SEND_REPLY_FAILED: " + dispatchEx.getMessage());
+                            }
                         }
                     }
                     case "ADD_TAGS" -> {

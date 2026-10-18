@@ -138,9 +138,15 @@ class ConversationTimelineServiceTest {
         assertThat(timeline.get(3).getCategory()).isEqualTo("LEAD_SCORE");
         assertThat(timeline.get(4).getCategory()).isEqualTo("CSAT");
 
-        // Verify sorted order
+        // Verify sorted order and immutable audit ledger metadata
         for (int i = 0; i < timeline.size() - 1; i++) {
             assertThat(timeline.get(i).getTimestamp()).isBeforeOrEqualTo(timeline.get(i + 1).getTimestamp());
+        }
+
+        for (TimelineEventDto event : timeline) {
+            assertThat(event.isImmutableAudit()).isTrue();
+            assertThat(event.getAuditChecksum()).isNotBlank();
+            assertThat(event.getMetadata()).containsKey("auditLedger");
         }
     }
 }

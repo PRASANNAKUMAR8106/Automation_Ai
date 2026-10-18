@@ -1,6 +1,7 @@
 package com.autoflow.modules.crm.service;
 
-import com.autoflow.modules.crm.dto.AgentProductivityDto.ApplyMacroResult;
+import com.autoflow.modules.crm.dto.AgentProductivityDto;
+import com.autoflow.modules.crm.dto.AgentProductivityDto.*;
 import com.autoflow.modules.crm.dto.CrmDto.MessagingWindowResponse;
 import com.autoflow.modules.crm.entity.*;
 import com.autoflow.modules.crm.repository.ConversationRepository;
@@ -204,5 +205,72 @@ class MacroExecutionServiceTest {
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.isSuppressionSkipped()).isTrue();
         verify(crmService, never()).sendAgentReply(any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("Should reject macro creation when actionsJson contains invalid action type")
+    void shouldRejectInvalidMacroActionType() {
+        AgentProductivityDto.CrmMacroRequest req = AgentProductivityDto.CrmMacroRequest.builder()
+                .name("Malicious Macro")
+                .actionsJson("[{\"type\": \"EXECUTE_COMMAND\", \"cmd\": \"rm -rf\"}]")
+                .build();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.createMacro(orgId, userId, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported macro action type");
+    }
+
+    @Test
+    @DisplayName("Should reject macro creation when actionsJson contains unrecognized fields")
+    void shouldRejectMacroWithUnrecognizedFields() {
+        AgentProductivityDto.CrmMacroRequest req = AgentProductivityDto.CrmMacroRequest.builder()
+                .name("Injection Macro")
+                .actionsJson("[{\"type\": \"SEND_REPLY\", \"content\": \"Hello\", \"unexpectedField\": \"bad\"}]")
+                .build();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.createMacro(orgId, userId, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unrecognized field 'unexpectedField'");
+    }
+
+    @Test
+    @DisplayName("Should handle external provider dispatch failure in SEND_REPLY without failing other actions")
+    void shouldHandleExternalDispatchFailureResiliently() {
+        Contact contact = Contact.builder().fullName("Bob Martin").build();
+        contact.setId(UUID.randomUUID());
+
+        Conversation conv = Conversation.builder()
+                .contact(contact)
+                .channel(ChannelType.WHATSAPP)
+                .build();
+        conv.setId(convoId);
+
+        String actionsJson = """
+                [
+                    {"type": "SEND_REPLY", "content": "Welcome aboard!"},
+                    {"type": "ADD_TAGS", "tags": ["welcome_sent"]}
+                ]
+                """;
+
+        CrmMacro macro = CrmMacro.builder().name("Welcome Flow").actionsJson(actionsJson).build();
+        macro.setId(macroId);
+
+        when(crmMacroRepository.findByIdAndOrganizationId(macroId, orgId)).thenReturn(Optional.of(macro));
+        when(conversationRepository.findByIdAndOrganizationId(convoId, orgId)).thenReturn(Optional.of(conv));
+        when(messagingWindowService.evaluateWindow(conv)).thenReturn(
+                MessagingWindowResponse.builder().windowStatus("ACTIVE_24H").build()
+        );
+        when(cannedResponseService.interpolateTemplate(any(), any(), any(), any())).thenReturn("Welcome aboard!");
+
+        // Simulate external network timeout during dispatch
+        doThrow(new RuntimeException("Meta Cloud API connection timeout"))
+                .when(crmService).sendAgentReply(any(), any(), any(), any(), anyBoolean());
+
+        ApplyMacroResult result = service.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_FAILED"));
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("ADD_TAGS"));
+        verify(crmService).addTagsToContact(eq(orgId), eq(contact.getId()), eq(List.of("welcome_sent")));
     }
 }

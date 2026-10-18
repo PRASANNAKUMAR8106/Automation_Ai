@@ -28,6 +28,11 @@ public class InternalNoteServiceImpl implements InternalNoteService {
     @Override
     @Transactional
     public InternalNoteResponse createInternalNote(UUID organizationId, UUID conversationId, UUID authorUserId, String authorEmail, PostInternalNoteRequest request) {
+        // Multi-layer social provider firewall: internal notes and supervisor whispers must NEVER reach external social channels
+        if (request.getContent() != null && (request.getContent().startsWith("[OUTBOUND]") || request.getContent().startsWith("[DISPATCH_EXTERNAL]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be routed to external social channels");
+        }
+
         Conversation conversation = conversationRepository.findByIdAndOrganizationId(conversationId, organizationId)
                 .orElseThrow(() -> new ResourceNotFoundException("Conversation", conversationId));
 
@@ -49,7 +54,7 @@ public class InternalNoteServiceImpl implements InternalNoteService {
 
         InternalNoteResponse response = toResponse(saved);
 
-        // Broadcast to live chat operators viewing the conversation
+        // Broadcast to live chat operators viewing the conversation (internal SSE only, zero external social provider dispatch)
         try {
             liveChatStreamService.broadcastInternalNote(organizationId, conversationId, response);
         } catch (Exception e) {
@@ -62,12 +67,31 @@ public class InternalNoteServiceImpl implements InternalNoteService {
     @Override
     @Transactional(readOnly = true)
     public List<InternalNoteResponse> getInternalNotes(UUID organizationId, UUID conversationId) {
+        return getInternalNotes(organizationId, conversationId, null, true);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<InternalNoteResponse> getInternalNotes(UUID organizationId, UUID conversationId, UUID requestingUserId, boolean isSupervisorOrAdmin) {
         // Assert conversation exists and belongs to tenant
         conversationRepository.findByIdAndOrganizationId(conversationId, organizationId)
                 .orElseThrow(() -> new ResourceNotFoundException("Conversation", conversationId));
 
-        return internalNoteRepository.findByOrganizationIdAndConversationIdOrderByCreatedAtAsc(organizationId, conversationId)
-                .stream()
+        List<ConversationInternalNote> allNotes = internalNoteRepository
+                .findByOrganizationIdAndConversationIdOrderByCreatedAtAsc(organizationId, conversationId);
+
+        return allNotes.stream()
+                .filter(n -> {
+                    // INTERNAL_NOTE = permitted internal team visibility
+                    if (!"SUPERVISOR_WHISPER".equalsIgnoreCase(n.getNoteType())) {
+                        return true;
+                    }
+                    // SUPERVISOR_WHISPER = explicitly authorized supervisor/agent visibility
+                    if (isSupervisorOrAdmin) {
+                        return true;
+                    }
+                    return requestingUserId != null && requestingUserId.equals(n.getAuthorUserId());
+                })
                 .map(this::toResponse)
                 .toList();
     }

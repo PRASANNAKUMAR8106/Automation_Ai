@@ -15,6 +15,7 @@ public interface CannedResponseService {
     void deleteCannedResponse(UUID organizationId, UUID id);
 
     List<CannedResponse> getCannedResponses(UUID organizationId, String category, String search);
+    List<CannedResponse> getCannedResponses(UUID organizationId, UUID userId, String category, String search);
 
     String interpolateTemplate(UUID organizationId, UUID conversationId, String rawContent, String agentName);
 

@@ -11,4 +11,6 @@ public interface InternalNoteService {
     InternalNoteResponse createInternalNote(UUID organizationId, UUID conversationId, UUID authorUserId, String authorEmail, PostInternalNoteRequest request);
 
     List<InternalNoteResponse> getInternalNotes(UUID organizationId, UUID conversationId);
+
+    List<InternalNoteResponse> getInternalNotes(UUID organizationId, UUID conversationId, UUID requestingUserId, boolean isSupervisorOrAdmin);
 }

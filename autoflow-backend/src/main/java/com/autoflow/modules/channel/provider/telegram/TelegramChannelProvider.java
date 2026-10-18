@@ -221,6 +221,10 @@ public class TelegramChannelProvider implements SocialChannelProvider {
      * Dispatches a text message to a Telegram chat.
      */
     public String sendMessage(String token, String chatId, String messageText) {
+        if (messageText != null && (messageText.startsWith("[INTERNAL_NOTE]") || messageText.startsWith("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to Telegram");
+        }
+
         if (isMockMode()) {
             log.info("Mock mode: simulating Telegram message to chat {} : {}", chatId, messageText);
             return "mock_tg_msg_" + System.currentTimeMillis();
