@@ -57,6 +57,9 @@ class MacroExecutionServiceTest {
     @Mock
     private UserRepository userRepository;
 
+    @Mock
+    private com.autoflow.modules.crm.repository.MessageRepository messageRepository;
+
     private MacroExecutionServiceImpl service;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -77,7 +80,8 @@ class MacroExecutionServiceTest {
                 cannedResponseService,
                 slaEventRepository,
                 userRepository,
-                objectMapper
+                objectMapper,
+                messageRepository
         );
     }
 
@@ -272,5 +276,45 @@ class MacroExecutionServiceTest {
         assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_FAILED"));
         assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("ADD_TAGS"));
         verify(crmService).addTagsToContact(eq(orgId), eq(contact.getId()), eq(List.of("welcome_sent")));
+    }
+
+    @Test
+    @DisplayName("Should suppress duplicate SEND_REPLY dispatched within the 5s idempotency window")
+    void shouldSuppressDuplicateSendReplyWithinWindow() {
+        Contact contact = Contact.builder().fullName("Alice Smith").build();
+        contact.setId(UUID.randomUUID());
+
+        Conversation conv = Conversation.builder()
+                .contact(contact)
+                .channel(ChannelType.WHATSAPP)
+                .build();
+        conv.setId(convoId);
+
+        String actionsJson = """
+                [
+                    {"type": "SEND_REPLY", "content": "Already replied!"}
+                ]
+                """;
+
+        CrmMacro macro = CrmMacro.builder().name("Duplicate Test").actionsJson(actionsJson).build();
+        macro.setId(macroId);
+
+        when(crmMacroRepository.findByIdAndOrganizationId(macroId, orgId)).thenReturn(Optional.of(macro));
+        when(conversationRepository.findByIdAndOrganizationId(convoId, orgId)).thenReturn(Optional.of(conv));
+        when(messagingWindowService.evaluateWindow(conv)).thenReturn(
+                MessagingWindowResponse.builder().windowStatus("ACTIVE_24H").build()
+        );
+        when(cannedResponseService.interpolateTemplate(any(), any(), any(), any())).thenReturn("Already replied!");
+
+        // Mock recent outbound message already exists
+        when(messageRepository.existsByConversationIdAndDirectionAndContentAndSentAtAfter(
+                eq(convoId), eq("OUTBOUND"), eq("Already replied!"), any(Instant.class)
+        )).thenReturn(true);
+
+        ApplyMacroResult result = service.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_SKIPPED"));
+        verify(crmService, never()).sendAgentReply(any(), any(), any(), any(), anyBoolean());
     }
 }

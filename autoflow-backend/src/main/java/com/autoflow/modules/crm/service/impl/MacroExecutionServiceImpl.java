@@ -12,16 +12,17 @@ import com.autoflow.modules.user.entity.User;
 import com.autoflow.modules.user.repository.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import com.autoflow.modules.crm.repository.MessageRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class MacroExecutionServiceImpl implements MacroExecutionService {
 
     private final CrmMacroRepository crmMacroRepository;
@@ -34,6 +35,52 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
     private final ConversationSlaEventRepository slaEventRepository;
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
+    @Nullable
+    private final MessageRepository messageRepository;
+
+    public MacroExecutionServiceImpl(
+            CrmMacroRepository crmMacroRepository,
+            ConversationRepository conversationRepository,
+            CrmService crmService,
+            MessagingWindowService messagingWindowService,
+            ConversationRoutingService conversationRoutingService,
+            SlaMonitoringService slaMonitoringService,
+            CannedResponseService cannedResponseService,
+            ConversationSlaEventRepository slaEventRepository,
+            UserRepository userRepository,
+            ObjectMapper objectMapper
+    ) {
+        this(crmMacroRepository, conversationRepository, crmService, messagingWindowService,
+                conversationRoutingService, slaMonitoringService, cannedResponseService,
+                slaEventRepository, userRepository, objectMapper, null);
+    }
+
+    @Autowired
+    public MacroExecutionServiceImpl(
+            CrmMacroRepository crmMacroRepository,
+            ConversationRepository conversationRepository,
+            CrmService crmService,
+            MessagingWindowService messagingWindowService,
+            ConversationRoutingService conversationRoutingService,
+            SlaMonitoringService slaMonitoringService,
+            CannedResponseService cannedResponseService,
+            ConversationSlaEventRepository slaEventRepository,
+            UserRepository userRepository,
+            ObjectMapper objectMapper,
+            @Autowired(required = false) @Nullable MessageRepository messageRepository
+    ) {
+        this.crmMacroRepository = crmMacroRepository;
+        this.conversationRepository = conversationRepository;
+        this.crmService = crmService;
+        this.messagingWindowService = messagingWindowService;
+        this.conversationRoutingService = conversationRoutingService;
+        this.slaMonitoringService = slaMonitoringService;
+        this.cannedResponseService = cannedResponseService;
+        this.slaEventRepository = slaEventRepository;
+        this.userRepository = userRepository;
+        this.objectMapper = objectMapper;
+        this.messageRepository = messageRepository;
+    }
 
     @Override
     @Transactional
@@ -126,10 +173,24 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
                             }
 
                             String interpolated = cannedResponseService.interpolateTemplate(organizationId, conversationId, rawContent, agentName);
+
+                            // Duplicate-dispatch protection (5-second deduplication window)
+                            if (messageRepository != null && messageRepository.existsByConversationIdAndDirectionAndContentAndSentAtAfter(
+                                    conversationId, "OUTBOUND", interpolated, java.time.Instant.now().minusSeconds(5))) {
+                                log.info("Macro [{}] SEND_REPLY skipped: duplicate dispatch detected within 5s window", macro.getName());
+                                actionsExecuted.add("SEND_REPLY_SKIPPED: Duplicate dispatch suppressed within idempotency window");
+                                break;
+                            }
+
                             try {
-                                crmService.sendAgentReply(organizationId, conversationId, interpolated, null, false);
-                                outboundSnippet = interpolated;
-                                actionsExecuted.add("SEND_REPLY: " + (interpolated.length() > 30 ? interpolated.substring(0, 30) + "..." : interpolated));
+                                Message sentMsg = crmService.sendAgentReply(organizationId, conversationId, interpolated, null, false);
+                                if (sentMsg != null && "FAILED".equalsIgnoreCase(sentMsg.getDeliveryStatus())) {
+                                    log.warn("Macro [{}] SEND_REPLY provider delivery failed", macro.getName());
+                                    actionsExecuted.add("SEND_REPLY_FAILED: External provider delivery failed");
+                                } else {
+                                    outboundSnippet = interpolated;
+                                    actionsExecuted.add("SEND_REPLY: " + (interpolated.length() > 30 ? interpolated.substring(0, 30) + "..." : interpolated));
+                                }
                             } catch (Exception dispatchEx) {
                                 log.warn("Macro [{}] SEND_REPLY external dispatch failed: {}", macro.getName(), dispatchEx.getMessage());
                                 actionsExecuted.add("SEND_REPLY_FAILED: " + dispatchEx.getMessage());

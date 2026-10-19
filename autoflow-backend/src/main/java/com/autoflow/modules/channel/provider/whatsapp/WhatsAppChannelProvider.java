@@ -280,6 +280,10 @@ public class WhatsAppChannelProvider implements SocialChannelProvider {
      * Dispatches a WhatsApp media message (document or image).
      */
     public String sendMediaMessage(String accessToken, String recipientPhone, String mediaType, String mediaUrl) {
+        if (mediaUrl != null && (mediaUrl.contains("[INTERNAL_NOTE]") || mediaUrl.contains("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to WhatsApp media");
+        }
+
         if (isMockMode()) {
             log.info("Mock mode: simulating WhatsApp media ({}) to {} : {}", mediaType, recipientPhone, mediaUrl);
             return "mock_wa_media_" + System.currentTimeMillis();

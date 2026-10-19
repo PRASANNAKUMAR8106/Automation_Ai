@@ -145,8 +145,8 @@ public class AgentCollisionServiceImpl implements AgentCollisionService {
             try {
                 String key = getRedisKey(organizationId, conversationId);
                 Map<Object, Object> entries = stringRedisTemplate.opsForHash().entries(key);
+                List<AgentPresenceDto> redisList = new ArrayList<>();
                 if (entries != null && !entries.isEmpty()) {
-                    List<AgentPresenceDto> redisList = new ArrayList<>();
                     for (Map.Entry<Object, Object> entry : entries.entrySet()) {
                         try {
                             JsonNode node = objectMapper.readTree(entry.getValue().toString());
@@ -164,13 +164,12 @@ public class AgentCollisionServiceImpl implements AgentCollisionService {
                             log.debug("Error parsing Redis presence entry: {}", parseEx.getMessage());
                         }
                     }
-                    if (!redisList.isEmpty()) {
-                        redisList.sort(Comparator.comparing(AgentPresenceDto::getLastActiveAt).reversed());
-                        return redisList;
-                    }
+                    redisList.sort(Comparator.comparing(AgentPresenceDto::getLastActiveAt).reversed());
                 }
+                // Redis call succeeded: return cluster authoritative list
+                return redisList;
             } catch (Exception e) {
-                log.debug("Failed reading Redis presence, falling back to local memory: {}", e.getMessage());
+                log.warn("Redis presence read failed (outage/timeout), falling back to instance in-memory lease: {}", e.getMessage());
             }
         }
 

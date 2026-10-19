@@ -13,8 +13,11 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("AgentCollisionService Unit Tests")
@@ -76,6 +79,34 @@ class AgentCollisionServiceTest {
         List<AgentPresenceDto> viewers = service.getActiveViewers(orgId, convoId);
 
         assertThat(viewers).hasSize(1);
+        assertThat(viewers.get(0).getUserEmail()).isEqualTo("alice@autoflow.ai");
+    }
+
+    @Test
+    @DisplayName("Should gracefully fall back to in-memory presence when Redis throws connection exception")
+    @SuppressWarnings("unchecked")
+    void shouldFallbackToInMemoryOnRedisOutage() {
+        org.springframework.data.redis.core.StringRedisTemplate mockRedis = mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.HashOperations<String, Object, Object> mockHashOps = mock(org.springframework.data.redis.core.HashOperations.class);
+
+        when(mockRedis.opsForHash()).thenReturn(mockHashOps);
+        // Simulate Redis network outage/timeout
+        when(mockHashOps.entries(anyString())).thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("Redis cluster unreachable"));
+
+        AgentCollisionServiceImpl redisAwareService = new AgentCollisionServiceImpl(
+                liveChatStreamService,
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                mockRedis
+        );
+
+        // Record presence (updates in-memory map even when Redis put fails/logs)
+        redisAwareService.recordPresence(orgId, convoId, agent1, "alice@autoflow.ai", "VIEWING");
+
+        // getActiveViewers tries Redis, catches exception, falls back to in-memory
+        List<AgentPresenceDto> viewers = redisAwareService.getActiveViewers(orgId, convoId);
+
+        assertThat(viewers).hasSize(1);
+        assertThat(viewers.get(0).getUserId()).isEqualTo(agent1);
         assertThat(viewers.get(0).getUserEmail()).isEqualTo("alice@autoflow.ai");
     }
 }

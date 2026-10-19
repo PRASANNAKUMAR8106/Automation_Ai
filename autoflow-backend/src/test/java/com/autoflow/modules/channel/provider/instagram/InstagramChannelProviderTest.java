@@ -93,4 +93,24 @@ class InstagramChannelProviderTest {
         assertDoesNotThrow(() -> provider.subscribeAppToWebhooks("17841405822304914", "page_token_xyz"));
         assertDoesNotThrow(() -> provider.unsubscribeAppFromWebhooks("17841405822304914", "page_token_xyz"));
     }
+
+    @Test
+    @DisplayName("Should block internal note and whisper in DM, comment replies, and media")
+    void testFirewallBlocksInternalNotesAndWhispers() {
+        assertThrows(SecurityException.class, () ->
+                provider.sendPrivateDirectMessage("page_token", "ig_user_1", "[INTERNAL_NOTE] Private note")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.sendPrivateDirectMessage("page_token", "ig_user_1", "[SUPERVISOR_WHISPER] Whisper note")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.postPublicCommentReply("page_token", "comment_123", "[INTERNAL_NOTE] Note in comment")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.postPublicCommentReply("page_token", "comment_123", "[SUPERVISOR_WHISPER] Whisper in comment")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.sendMediaMessage("page_token", "ig_user_1", "IMAGE", "https://cdn.example.com/[INTERNAL_NOTE]/doc.png")
+        );
+    }
 }

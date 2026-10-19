@@ -137,6 +137,11 @@ public class CrmServiceImpl implements CrmService {
     @Override
     @Transactional
     public Message recordMessage(UUID organizationId, Conversation conversation, String direction, String senderType, String messageType, String content, String mediaUrl, String externalMessageId) {
+        return recordMessage(organizationId, conversation, direction, senderType, messageType, content, mediaUrl, externalMessageId, "DELIVERED");
+    }
+
+    @Transactional
+    public Message recordMessage(UUID organizationId, Conversation conversation, String direction, String senderType, String messageType, String content, String mediaUrl, String externalMessageId, String deliveryStatus) {
         Message msg = Message.builder()
                 .organizationId(organizationId)
                 .conversation(conversation)
@@ -147,7 +152,7 @@ public class CrmServiceImpl implements CrmService {
                 .mediaUrl(mediaUrl)
                 .externalMessageId(externalMessageId)
                 .sentAt(Instant.now())
-                .deliveryStatus("DELIVERED")
+                .deliveryStatus(deliveryStatus != null ? deliveryStatus : "DELIVERED")
                 .build();
 
         msg = messageRepository.save(msg);
@@ -296,6 +301,9 @@ public class CrmServiceImpl implements CrmService {
         if (content != null && (content.startsWith("[INTERNAL_NOTE]") || content.startsWith("[SUPERVISOR_WHISPER]"))) {
             throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to external channels");
         }
+        if (mediaUrl != null && (mediaUrl.contains("[INTERNAL_NOTE]") || mediaUrl.contains("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched via media messages");
+        }
 
         Contact contact = conversation.getContact();
         ChannelType channel = conversation.getChannel();
@@ -313,36 +321,62 @@ public class CrmServiceImpl implements CrmService {
         }
 
         String externalMsgId = "agent_reply_" + System.currentTimeMillis();
-        try {
-            if (channel == ChannelType.INSTAGRAM) {
-                if (mediaUrl != null && !mediaUrl.isBlank()) {
-                    externalMsgId = instagramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
-                } else {
-                    externalMsgId = instagramChannelProvider.sendPrivateDirectMessage(token, recipientId, content);
+        boolean dispatchFailed = false;
+        String dispatchError = null;
+
+        int maxAttempts = 2;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                if (channel == ChannelType.INSTAGRAM) {
+                    if (mediaUrl != null && !mediaUrl.isBlank()) {
+                        externalMsgId = instagramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                    } else {
+                        externalMsgId = instagramChannelProvider.sendPrivateDirectMessage(token, recipientId, content);
+                    }
+                } else if (channel == ChannelType.WHATSAPP) {
+                    if (mediaUrl != null && !mediaUrl.isBlank()) {
+                        externalMsgId = whatsAppChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                    } else {
+                        externalMsgId = whatsAppChannelProvider.sendMessage(token, recipientId, content);
+                    }
+                } else if (channel == ChannelType.TELEGRAM) {
+                    if (mediaUrl != null && !mediaUrl.isBlank()) {
+                        externalMsgId = telegramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
+                    } else {
+                        externalMsgId = telegramChannelProvider.sendMessage(token, recipientId, content);
+                    }
                 }
-            } else if (channel == ChannelType.WHATSAPP) {
-                if (mediaUrl != null && !mediaUrl.isBlank()) {
-                    externalMsgId = whatsAppChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
-                } else {
-                    externalMsgId = whatsAppChannelProvider.sendMessage(token, recipientId, content);
-                }
-            } else if (channel == ChannelType.TELEGRAM) {
-                if (mediaUrl != null && !mediaUrl.isBlank()) {
-                    externalMsgId = telegramChannelProvider.sendMediaMessage(token, recipientId, "IMAGE", mediaUrl);
-                } else {
-                    externalMsgId = telegramChannelProvider.sendMessage(token, recipientId, content);
+                dispatchFailed = false;
+                dispatchError = null;
+                break;
+            } catch (Exception e) {
+                log.warn("Attempt {}/{} failed to dispatch live chat agent message through provider {}: {}",
+                        attempt, maxAttempts, channel, e.getMessage());
+                dispatchFailed = true;
+                dispatchError = e.getMessage();
+                if (attempt < maxAttempts) {
+                    try {
+                        Thread.sleep(150);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
             }
-        } catch (Exception e) {
-            log.error("Failed to dispatch live chat agent message through provider {}: {}", channel, e.getMessage());
-            // In dev/mock mode or network failure, we still log and persist the message
+        }
+
+        if (dispatchFailed) {
+            log.error("All {} attempts to dispatch live chat agent message through provider {} failed: {}",
+                    maxAttempts, channel, dispatchError);
+            externalMsgId = "failed_" + System.currentTimeMillis();
         }
 
         String messageType = (mediaUrl != null && !mediaUrl.isBlank()) ? "MEDIA" : "TEXT";
-        Message reply = recordMessage(organizationId, conversation, "OUTBOUND", "AGENT", messageType, content, mediaUrl, externalMsgId);
-        conversation.setHumanAgentReplied(true);
+        String status = dispatchFailed ? "FAILED" : "DELIVERED";
+        Message reply = recordMessage(organizationId, conversation, "OUTBOUND", "AGENT", messageType, content, mediaUrl, externalMsgId, status);
+        conversation.setHumanAgentReplied(!dispatchFailed);
         conversationRepository.save(conversation);
-        if (slaMonitoringService != null) {
+        if (!dispatchFailed && slaMonitoringService != null) {
             slaMonitoringService.recordFirstAgentReply(conversation);
         }
         return reply;

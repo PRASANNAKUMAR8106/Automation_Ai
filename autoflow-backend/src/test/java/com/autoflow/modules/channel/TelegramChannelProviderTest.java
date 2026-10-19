@@ -90,4 +90,18 @@ class TelegramChannelProviderTest {
         assertNotNull(mediaMsgId);
         assertTrue(mediaMsgId.startsWith("mock_tg_media"));
     }
+
+    @Test
+    @DisplayName("Should block internal note and supervisor whisper in text and media")
+    void testFirewallBlocksInternalNotesAndWhispers() {
+        assertThrows(SecurityException.class, () ->
+                provider.sendMessage("mock_token", "chat_123456", "[INTERNAL_NOTE] Private note")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.sendMessage("mock_token", "chat_123456", "[SUPERVISOR_WHISPER] Whisper text")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.sendMediaMessage("mock_token", "chat_123456", "IMAGE", "https://cdn.example.com/[INTERNAL_NOTE]/doc.png")
+        );
+    }
 }

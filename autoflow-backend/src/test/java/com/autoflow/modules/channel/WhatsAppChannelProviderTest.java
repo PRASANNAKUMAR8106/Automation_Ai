@@ -78,4 +78,18 @@ class WhatsAppChannelProviderTest {
         assertNotNull(mediaMsgId);
         assertTrue(mediaMsgId.startsWith("mock_wa_media"));
     }
+
+    @Test
+    @DisplayName("Should block internal note and supervisor whisper in text and media")
+    void testFirewallBlocksInternalNotesAndWhispers() {
+        assertThrows(SecurityException.class, () ->
+                provider.sendMessage("mock_token", "+1555019999", "[INTERNAL_NOTE] Team note")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.sendMessage("mock_token", "+1555019999", "[SUPERVISOR_WHISPER] Whisper text")
+        );
+        assertThrows(SecurityException.class, () ->
+                provider.sendMediaMessage("mock_token", "+1555019999", "IMAGE", "https://cdn.example.com/[INTERNAL_NOTE]/doc.png")
+        );
+    }
 }

@@ -46,14 +46,16 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
             if (m.getMediaUrl() != null) meta.put("mediaUrl", m.getMediaUrl());
             attachAuditLedger(meta, organizationId, conversationId, m.getSentAt());
 
-            String checksum = computeAuditChecksum(organizationId, conversationId, m.getId(), "MESSAGE", m.getDirection(), m.getSentAt());
+            String actor = m.getSenderType();
+            String summary = m.getContent();
+            String checksum = computeAuditChecksum(organizationId, conversationId, m.getId(), "MESSAGE", m.getDirection(), actor, summary, m.getSentAt());
 
             events.add(TimelineEventDto.builder()
                     .id(m.getId())
                     .category("MESSAGE")
                     .eventType(m.getDirection())
-                    .summary(m.getContent())
-                    .actor(m.getSenderType())
+                    .summary(summary)
+                    .actor(actor)
                     .timestamp(m.getSentAt())
                     .metadata(meta)
                     .auditChecksum(checksum)
@@ -69,14 +71,16 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
             if (n.getAuthorUserId() != null) meta.put("authorUserId", n.getAuthorUserId().toString());
             attachAuditLedger(meta, organizationId, conversationId, n.getCreatedAt());
 
-            String checksum = computeAuditChecksum(organizationId, conversationId, n.getId(), "INTERNAL_NOTE", n.getNoteType(), n.getCreatedAt());
+            String actor = n.getAuthorEmail() != null ? n.getAuthorEmail() : "Team Member";
+            String summary = n.getContent();
+            String checksum = computeAuditChecksum(organizationId, conversationId, n.getId(), "INTERNAL_NOTE", n.getNoteType(), actor, summary, n.getCreatedAt());
 
             events.add(TimelineEventDto.builder()
                     .id(n.getId())
                     .category("INTERNAL_NOTE")
                     .eventType(n.getNoteType())
-                    .summary(n.getContent())
-                    .actor(n.getAuthorEmail() != null ? n.getAuthorEmail() : "Team Member")
+                    .summary(summary)
+                    .actor(actor)
                     .timestamp(n.getCreatedAt())
                     .metadata(meta)
                     .auditChecksum(checksum)
@@ -96,14 +100,16 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
             attachAuditLedger(meta, organizationId, conversationId, se.getCreatedAt());
 
             String eventTypeStr = se.getEventType() != null ? se.getEventType().name() : "EVENT";
-            String checksum = computeAuditChecksum(organizationId, conversationId, se.getId(), "SLA_EVENT", eventTypeStr, se.getCreatedAt());
+            String actor = "SYSTEM";
+            String summary = se.getReason() != null ? se.getReason() : eventTypeStr;
+            String checksum = computeAuditChecksum(organizationId, conversationId, se.getId(), "SLA_EVENT", eventTypeStr, actor, summary, se.getCreatedAt());
 
             events.add(TimelineEventDto.builder()
                     .id(se.getId())
                     .category("SLA_EVENT")
                     .eventType(eventTypeStr)
-                    .summary(se.getReason() != null ? se.getReason() : eventTypeStr)
-                    .actor("SYSTEM")
+                    .summary(summary)
+                    .actor(actor)
                     .timestamp(se.getCreatedAt())
                     .metadata(meta)
                     .auditChecksum(checksum)
@@ -127,14 +133,15 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
                     : "CSAT Survey Dispatched";
 
             String eventTypeStr = csat.getStatus() != null ? csat.getStatus().name() : "CSAT";
-            String checksum = computeAuditChecksum(organizationId, conversationId, csat.getId(), "CSAT", eventTypeStr, csatTs);
+            String actor = "CUSTOMER";
+            String checksum = computeAuditChecksum(organizationId, conversationId, csat.getId(), "CSAT", eventTypeStr, actor, summary, csatTs);
 
             events.add(TimelineEventDto.builder()
                     .id(csat.getId())
                     .category("CSAT")
                     .eventType(eventTypeStr)
                     .summary(summary)
-                    .actor("CUSTOMER")
+                    .actor(actor)
                     .timestamp(csatTs)
                     .metadata(meta)
                     .auditChecksum(checksum)
@@ -154,15 +161,16 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
 
             String sign = audit.getScoreDelta() > 0 ? "+" : "";
             String summary = audit.getReason() + " (Delta: " + sign + audit.getScoreDelta() + ", New: " + audit.getNewScore() + ")";
+            String actor = "SYSTEM";
 
-            String checksum = computeAuditChecksum(organizationId, conversationId, audit.getId(), "LEAD_SCORE", "SCORE_UPDATE", audit.getCreatedAt());
+            String checksum = computeAuditChecksum(organizationId, conversationId, audit.getId(), "LEAD_SCORE", "SCORE_UPDATE", actor, summary, audit.getCreatedAt());
 
             events.add(TimelineEventDto.builder()
                     .id(audit.getId())
                     .category("LEAD_SCORE")
                     .eventType("SCORE_UPDATE")
                     .summary(summary)
-                    .actor("SYSTEM")
+                    .actor(actor)
                     .timestamp(audit.getCreatedAt())
                     .metadata(meta)
                     .auditChecksum(checksum)
@@ -176,20 +184,52 @@ public class ConversationTimelineServiceImpl implements ConversationTimelineServ
         return events;
     }
 
+    @Override
+    public boolean verifyTimelineEventIntegrity(TimelineEventDto event, UUID organizationId, UUID conversationId) {
+        if (event == null || event.getAuditChecksum() == null || event.getId() == null) {
+            return false;
+        }
+        String expectedChecksum = computeAuditChecksum(
+                organizationId,
+                conversationId,
+                event.getId(),
+                event.getCategory(),
+                event.getEventType(),
+                event.getActor(),
+                event.getSummary(),
+                event.getTimestamp()
+        );
+        return MessageDigest.isEqual(
+                expectedChecksum.getBytes(StandardCharsets.UTF_8),
+                event.getAuditChecksum().getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
     private void attachAuditLedger(Map<String, Object> meta, UUID organizationId, UUID conversationId, Instant ts) {
         meta.put("auditLedger", Map.of(
                 "tenantId", organizationId.toString(),
                 "conversationId", conversationId.toString(),
                 "recordedAt", ts != null ? ts.toString() : Instant.now().toString(),
+                "canonicalVersion", "v1",
                 "immutable", true
         ));
     }
 
-    private String computeAuditChecksum(UUID orgId, UUID convId, UUID eventId, String category, String eventType, Instant ts) {
+    private String computeAuditChecksum(UUID orgId, UUID convId, UUID eventId, String category, String eventType, String actor, String summary, Instant ts) {
         try {
-            String raw = orgId + ":" + convId + ":" + eventId + ":" + category + ":" + eventType + ":" + (ts != null ? ts.toEpochMilli() : 0);
+            // Strict canonical representation: v1:{orgId}:{convId}:{eventId}:{category}:{eventType}:{actor}:{summary}:{timestampMs}
+            String canonicalString = String.format("v1:%s:%s:%s:%s:%s:%s:%s:%d",
+                    orgId != null ? orgId.toString().toLowerCase() : "",
+                    convId != null ? convId.toString().toLowerCase() : "",
+                    eventId != null ? eventId.toString().toLowerCase() : "",
+                    category != null ? category.trim().toUpperCase() : "",
+                    eventType != null ? eventType.trim().toUpperCase() : "",
+                    actor != null ? actor.trim() : "",
+                    summary != null ? summary.trim() : "",
+                    ts != null ? ts.toEpochMilli() : 0L
+            );
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(raw.getBytes(StandardCharsets.UTF_8));
+            byte[] hash = md.digest(canonicalString.getBytes(StandardCharsets.UTF_8));
             StringBuilder hex = new StringBuilder();
             for (byte b : hash) {
                 hex.append(String.format("%02x", b));

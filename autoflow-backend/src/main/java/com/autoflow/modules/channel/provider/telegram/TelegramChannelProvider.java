@@ -258,6 +258,10 @@ public class TelegramChannelProvider implements SocialChannelProvider {
      * Dispatches a media message (photo or document) to a Telegram chat.
      */
     public String sendMediaMessage(String token, String chatId, String mediaType, String mediaUrl) {
+        if (mediaUrl != null && (mediaUrl.contains("[INTERNAL_NOTE]") || mediaUrl.contains("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to Telegram media");
+        }
+
         if (isMockMode()) {
             log.info("Mock mode: simulating Telegram media ({}) to chat {} : {}", mediaType, chatId, mediaUrl);
             return "mock_tg_media_" + System.currentTimeMillis();

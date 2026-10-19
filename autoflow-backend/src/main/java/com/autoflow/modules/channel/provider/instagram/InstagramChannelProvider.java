@@ -286,6 +286,10 @@ public class InstagramChannelProvider implements SocialChannelProvider {
     }
 
     public String postPublicCommentReply(String pageAccessToken, String commentId, String replyMessage) {
+        if (replyMessage != null && (replyMessage.startsWith("[INTERNAL_NOTE]") || replyMessage.startsWith("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to Instagram comments");
+        }
+
         if (isMockMode()) {
             log.info("Mock mode active; simulating public comment reply to {} with text: {}", commentId, replyMessage);
             return "mock_reply_id_" + System.currentTimeMillis();
@@ -345,6 +349,10 @@ public class InstagramChannelProvider implements SocialChannelProvider {
     }
 
     public String sendMediaMessage(String pageAccessToken, String recipientId, String mediaType, String mediaUrl) {
+        if (mediaUrl != null && (mediaUrl.contains("[INTERNAL_NOTE]") || mediaUrl.contains("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to Instagram media");
+        }
+
         if (isMockMode()) {
             log.info("Mock mode active; simulating media DM ({}) to {} with url: {}", mediaType, recipientId, mediaUrl);
             return "mock_media_msg_id_" + System.currentTimeMillis();

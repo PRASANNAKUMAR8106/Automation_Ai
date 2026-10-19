@@ -371,4 +371,85 @@ class CrmServiceTest {
         assertTrue(resolved.isResolved());
         verify(liveChatStreamService).broadcastConversationResolved(testOrgId, convoId, true);
     }
+
+    @Test
+    @DisplayName("Should block agent reply if content contains internal note or whisper")
+    void shouldBlockAgentReplyWithInternalNoteOrWhisper() {
+        UUID convoId = UUID.randomUUID();
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.WHATSAPP)
+                .build();
+        convo.setId(convoId);
+
+        when(conversationRepository.findById(convoId)).thenReturn(Optional.of(convo));
+
+        assertThrows(SecurityException.class, () ->
+                crmService.sendAgentReply(testOrgId, convoId, "[INTERNAL_NOTE] Private note", null, false)
+        );
+
+        assertThrows(SecurityException.class, () ->
+                crmService.sendAgentReply(testOrgId, convoId, "[SUPERVISOR_WHISPER] Secret whisper", null, false)
+        );
+
+        verifyNoInteractions(whatsAppChannelProvider);
+    }
+
+    @Test
+    @DisplayName("Should block agent reply if mediaUrl contains internal note or whisper marker")
+    void shouldBlockAgentReplyWithInternalNoteInMediaUrl() {
+        UUID convoId = UUID.randomUUID();
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.WHATSAPP)
+                .build();
+        convo.setId(convoId);
+
+        when(conversationRepository.findById(convoId)).thenReturn(Optional.of(convo));
+
+        assertThrows(SecurityException.class, () ->
+                crmService.sendAgentReply(testOrgId, convoId, "Photo attachment", "https://s3.aws.com/[INTERNAL_NOTE]/doc.pdf", false)
+        );
+
+        verifyNoInteractions(whatsAppChannelProvider);
+    }
+
+    @Test
+    @DisplayName("Should record message with FAILED deliveryStatus when channel provider dispatch fails")
+    void shouldRecordFailedStatusWhenProviderFails() {
+        UUID convoId = UUID.randomUUID();
+        Contact contact = Contact.builder()
+                .channel(ChannelType.WHATSAPP)
+                .externalId("+15551234567")
+                .build();
+        contact.setId(UUID.randomUUID());
+        contact.setOrganizationId(testOrgId);
+
+        Conversation convo = Conversation.builder()
+                .organizationId(testOrgId)
+                .channel(ChannelType.WHATSAPP)
+                .contact(contact)
+                .build();
+        convo.setId(convoId);
+
+        when(conversationRepository.findById(convoId)).thenReturn(Optional.of(convo));
+        when(connectedAccountRepository.findByOrganizationIdAndChannel(testOrgId, ChannelType.WHATSAPP))
+                .thenReturn(Optional.empty());
+        when(whatsAppChannelProvider.sendMessage(any(), any(), any()))
+                .thenThrow(new RuntimeException("Cloud API Rate Limit Exceeded"));
+        when(conversationRepository.save(any(Conversation.class))).thenAnswer(i -> i.getArgument(0));
+
+        ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
+        when(messageRepository.save(messageCaptor.capture())).thenAnswer(i -> {
+            Message m = i.getArgument(0);
+            m.setId(UUID.randomUUID());
+            return m;
+        });
+
+        Message sent = crmService.sendAgentReply(testOrgId, convoId, "Retry test message", null, false);
+
+        assertNotNull(sent);
+        assertEquals("FAILED", sent.getDeliveryStatus());
+        assertTrue(sent.getExternalMessageId().startsWith("failed_"));
+    }
 }

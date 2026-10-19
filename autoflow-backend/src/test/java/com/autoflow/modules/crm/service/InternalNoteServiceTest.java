@@ -110,4 +110,63 @@ class InternalNoteServiceTest {
         assertThatThrownBy(() -> service.getInternalNotes(orgId, convoId))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
+
+    @Test
+    @DisplayName("Should reject internal note content attempting external outbound dispatch")
+    void shouldRejectOutboundInInternalNote() {
+        PostInternalNoteRequest req = PostInternalNoteRequest.builder()
+                .content("[OUTBOUND] Direct message to customer")
+                .noteType("INTERNAL_NOTE")
+                .build();
+
+        assertThatThrownBy(() -> service.createInternalNote(orgId, convoId, authorId, "agent@autoflow.ai", req))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("FIREWALL BREACH");
+    }
+
+    @Test
+    @DisplayName("Should enforce visibility filter: non-supervisors cannot view whispers by other authors")
+    void shouldEnforceWhisperVisibility() {
+        Conversation conversation = Conversation.builder().build();
+        conversation.setId(convoId);
+        conversation.setOrganizationId(orgId);
+        when(conversationRepository.findByIdAndOrganizationId(convoId, orgId)).thenReturn(Optional.of(conversation));
+
+        UUID supervisorId = UUID.randomUUID();
+        UUID otherAgentId = UUID.randomUUID();
+
+        ConversationInternalNote teamNote = ConversationInternalNote.builder()
+                .conversation(conversation)
+                .noteType("INTERNAL_NOTE")
+                .authorUserId(authorId)
+                .authorEmail("agent@autoflow.ai")
+                .content("General team note")
+                .build();
+        teamNote.setId(UUID.randomUUID());
+
+        ConversationInternalNote whisper = ConversationInternalNote.builder()
+                .conversation(conversation)
+                .noteType("SUPERVISOR_WHISPER")
+                .authorUserId(supervisorId)
+                .authorEmail("lead@autoflow.ai")
+                .content("Confidential lead whisper")
+                .build();
+        whisper.setId(UUID.randomUUID());
+
+        when(internalNoteRepository.findByOrganizationIdAndConversationIdOrderByCreatedAtAsc(orgId, convoId))
+                .thenReturn(List.of(teamNote, whisper));
+
+        // When supervisor views: sees both
+        List<InternalNoteResponse> supervisorView = service.getInternalNotes(orgId, convoId, otherAgentId, true);
+        assertThat(supervisorView).hasSize(2);
+
+        // When non-supervisor views: sees only teamNote
+        List<InternalNoteResponse> agentView = service.getInternalNotes(orgId, convoId, otherAgentId, false);
+        assertThat(agentView).hasSize(1);
+        assertThat(agentView.get(0).getContent()).isEqualTo("General team note");
+
+        // When author of whisper views as non-supervisor: sees their own whisper
+        List<InternalNoteResponse> authorView = service.getInternalNotes(orgId, convoId, supervisorId, false);
+        assertThat(authorView).hasSize(2);
+    }
 }

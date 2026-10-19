@@ -15,4 +15,6 @@ public interface MessageRepository extends JpaRepository<Message, UUID> {
     long countByOrganizationId(UUID organizationId);
 
     long countByOrganizationIdAndDirection(UUID organizationId, String direction);
+
+    boolean existsByConversationIdAndDirectionAndContentAndSentAtAfter(UUID conversationId, String direction, String content, java.time.Instant sentAtAfter);
 }

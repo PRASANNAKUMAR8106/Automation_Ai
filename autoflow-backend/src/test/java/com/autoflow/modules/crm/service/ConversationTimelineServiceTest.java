@@ -147,6 +147,45 @@ class ConversationTimelineServiceTest {
             assertThat(event.isImmutableAudit()).isTrue();
             assertThat(event.getAuditChecksum()).isNotBlank();
             assertThat(event.getMetadata()).containsKey("auditLedger");
+            assertThat(timelineService.verifyTimelineEventIntegrity(event, orgId, convoId)).isTrue();
         }
+    }
+
+    @Test
+    @DisplayName("Should verify timeline event integrity and detect checksum tampering")
+    void shouldDetectTimelineTampering() {
+        Conversation conversation = Conversation.builder().build();
+        conversation.setId(convoId);
+        conversation.setOrganizationId(orgId);
+        when(conversationRepository.findByIdAndOrganizationId(convoId, orgId)).thenReturn(Optional.of(conversation));
+
+        Message msg = Message.builder()
+                .direction("INBOUND")
+                .senderType("CONTACT")
+                .content("Original text")
+                .sentAt(Instant.now())
+                .build();
+        msg.setId(UUID.randomUUID());
+        when(crmService.getMessages(orgId, convoId)).thenReturn(List.of(msg));
+
+        List<TimelineEventDto> timeline = timelineService.getConversationTimeline(orgId, convoId);
+        TimelineEventDto event = timeline.get(0);
+
+        assertThat(timelineService.verifyTimelineEventIntegrity(event, orgId, convoId)).isTrue();
+
+        // Tamper with summary
+        TimelineEventDto tampered = TimelineEventDto.builder()
+                .id(event.getId())
+                .category(event.getCategory())
+                .eventType(event.getEventType())
+                .summary("Tampered text")
+                .actor(event.getActor())
+                .timestamp(event.getTimestamp())
+                .metadata(event.getMetadata())
+                .auditChecksum(event.getAuditChecksum())
+                .immutableAudit(true)
+                .build();
+
+        assertThat(timelineService.verifyTimelineEventIntegrity(tampered, orgId, convoId)).isFalse();
     }
 }

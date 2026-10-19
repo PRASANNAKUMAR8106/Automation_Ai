@@ -53,4 +53,10 @@ public class SocialChannelProviderRegistry {
             throw new SecurityException("FIREWALL BREACH: Content tagged as internal note or whisper cannot be dispatched to external social providers!");
         }
     }
+
+    public void assertPermittedOutboundMedia(String mediaUrl) {
+        if (mediaUrl != null && (mediaUrl.contains("[INTERNAL_NOTE]") || mediaUrl.contains("[SUPERVISOR_WHISPER]"))) {
+            throw new SecurityException("FIREWALL BREACH: Media URL tagged as internal note or whisper cannot be dispatched to external social providers!");
+        }
+    }
 }
