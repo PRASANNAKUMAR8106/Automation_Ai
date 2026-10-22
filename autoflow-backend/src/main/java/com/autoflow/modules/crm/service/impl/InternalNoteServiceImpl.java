@@ -52,6 +52,10 @@ public class InternalNoteServiceImpl implements InternalNoteService {
 
         ConversationInternalNote saved = internalNoteRepository.save(note);
 
+        // Durable, tamper-evident audit checksum. The saved instance is managed inside this
+        // transaction, so sealing it here is flushed to the database on commit.
+        com.autoflow.modules.crm.service.AuditChecksumUtils.sealInternalNote(organizationId, conversation.getId(), saved);
+
         InternalNoteResponse response = toResponse(saved);
 
         // Broadcast to live chat operators viewing the conversation (internal SSE only, zero external social provider dispatch)

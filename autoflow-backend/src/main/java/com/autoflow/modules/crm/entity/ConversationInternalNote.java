@@ -31,4 +31,7 @@ public class ConversationInternalNote extends TenantAwareEntity {
 
     @Column(name = "content", nullable = false, columnDefinition = "text")
     private String content;
+
+    @Column(name = "audit_checksum", length = 64)
+    private String auditChecksum;
 }

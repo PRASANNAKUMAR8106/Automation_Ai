@@ -42,6 +42,9 @@ class ConversationTimelineServiceTest {
     @Mock
     private ContactLeadScoreAuditRepository leadScoreAuditRepository;
 
+    @Mock
+    private MessageRepository messageRepository;
+
     private ConversationTimelineServiceImpl timelineService;
 
     private final UUID orgId = UUID.randomUUID();
@@ -55,7 +58,8 @@ class ConversationTimelineServiceTest {
                 internalNoteRepository,
                 slaEventRepository,
                 csatSurveyRepository,
-                leadScoreAuditRepository
+                leadScoreAuditRepository,
+                messageRepository
         );
     }
 
@@ -187,5 +191,47 @@ class ConversationTimelineServiceTest {
                 .build();
 
         assertThat(timelineService.verifyTimelineEventIntegrity(tampered, orgId, convoId)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should detect when protected database entity fields are modified after checksum persistence")
+    void shouldDetectDatabaseRecordTampering() {
+        Conversation conversation = Conversation.builder().build();
+        conversation.setId(convoId);
+        conversation.setOrganizationId(orgId);
+        when(conversationRepository.findByIdAndOrganizationId(convoId, orgId)).thenReturn(Optional.of(conversation));
+
+        Instant sentAt = Instant.now();
+        UUID msgId = UUID.randomUUID();
+        String originalContent = "Confidential customer details";
+        String validChecksum = AuditChecksumUtils.computeCanonicalChecksum(
+                orgId, convoId, msgId, "MESSAGE", "INBOUND", "CONTACT", originalContent, sentAt
+        );
+
+        Message persistedMsg = Message.builder()
+                .organizationId(orgId)
+                .conversation(conversation)
+                .direction("INBOUND")
+                .senderType("CONTACT")
+                .content(originalContent)
+                .sentAt(sentAt)
+                .auditChecksum(validChecksum)
+                .build();
+        persistedMsg.setId(msgId);
+
+        when(crmService.getMessages(orgId, convoId)).thenReturn(List.of(persistedMsg));
+        when(messageRepository.findById(msgId)).thenReturn(Optional.of(persistedMsg));
+
+        List<TimelineEventDto> timeline = timelineService.getConversationTimeline(orgId, convoId);
+        TimelineEventDto event = timeline.get(0);
+
+        // Authentic record passes verification
+        assertThat(timelineService.verifyTimelineEventIntegrity(event, orgId, convoId)).isTrue();
+
+        // Tamper with protected field in the persisted database entity
+        persistedMsg.setContent("Tampered content injected directly in DB");
+
+        // Verification must detect the tampering and fail
+        assertThat(timelineService.verifyTimelineEventIntegrity(event, orgId, convoId)).isFalse();
     }
 }

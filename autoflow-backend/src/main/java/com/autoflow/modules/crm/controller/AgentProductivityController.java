@@ -21,6 +21,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -128,6 +129,19 @@ public class AgentProductivityController {
         UUID organizationId = TenantContext.getRequiredTenantId();
         List<AgentPresenceDto> active = agentCollisionService.getActiveViewers(organizationId, id);
         return ResponseEntity.ok(ApiResponse.ok("Active presence list retrieved", active));
+    }
+
+    @GetMapping("/presence/status")
+    @Operation(summary = "Get Presence Sharing Status", description = "Reports whether agent presence is shared across the cluster or degraded to instance-local tracking")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getPresenceStatus() {
+        boolean degraded = agentCollisionService.isDegradedMode();
+        return ResponseEntity.ok(ApiResponse.ok("Presence status retrieved", Map.of(
+                "degraded", degraded,
+                "scope", degraded ? "INSTANCE_LOCAL" : "CLUSTER_SHARED",
+                "description", degraded
+                        ? "Shared presence is unavailable - collision detection only sees agents connected to this instance"
+                        : "Shared presence is backed by the cluster store - collision detection sees every connected agent"
+        )));
     }
 
     // --- 3. INTERNAL NOTES & SUPERVISOR WHISPERS ---

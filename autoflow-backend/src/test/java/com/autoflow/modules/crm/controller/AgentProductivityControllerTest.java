@@ -221,6 +221,28 @@ class AgentProductivityControllerTest {
     }
 
     @Test
+    @DisplayName("GET /api/v1/crm/presence/status - reports cluster-wide presence scope")
+    void shouldGetPresenceStatus() throws Exception {
+        when(agentCollisionService.isDegradedMode()).thenReturn(false);
+
+        mockMvc.perform(get("/api/v1/crm/presence/status"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.degraded").value(false))
+                .andExpect(jsonPath("$.data.scope").value("CLUSTER_SHARED"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/crm/presence/status - reports degraded instance-local presence")
+    void shouldGetDegradedPresenceStatus() throws Exception {
+        when(agentCollisionService.isDegradedMode()).thenReturn(true);
+
+        mockMvc.perform(get("/api/v1/crm/presence/status"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.degraded").value(true))
+                .andExpect(jsonPath("$.data.scope").value("INSTANCE_LOCAL"));
+    }
+
+    @Test
     @DisplayName("GET /api/v1/crm/conversations/{id}/timeline - returns unified timeline")
     void shouldGetTimeline() throws Exception {
         TimelineEventDto event = TimelineEventDto.builder()

@@ -37,6 +37,8 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
     private final ObjectMapper objectMapper;
     @Nullable
     private final MessageRepository messageRepository;
+    @Nullable
+    private final CrmOutboxService outboxService;
 
     public MacroExecutionServiceImpl(
             CrmMacroRepository crmMacroRepository,
@@ -52,7 +54,25 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
     ) {
         this(crmMacroRepository, conversationRepository, crmService, messagingWindowService,
                 conversationRoutingService, slaMonitoringService, cannedResponseService,
-                slaEventRepository, userRepository, objectMapper, null);
+                slaEventRepository, userRepository, objectMapper, null, null);
+    }
+
+    public MacroExecutionServiceImpl(
+            CrmMacroRepository crmMacroRepository,
+            ConversationRepository conversationRepository,
+            CrmService crmService,
+            MessagingWindowService messagingWindowService,
+            ConversationRoutingService conversationRoutingService,
+            SlaMonitoringService slaMonitoringService,
+            CannedResponseService cannedResponseService,
+            ConversationSlaEventRepository slaEventRepository,
+            UserRepository userRepository,
+            ObjectMapper objectMapper,
+            @Nullable MessageRepository messageRepository
+    ) {
+        this(crmMacroRepository, conversationRepository, crmService, messagingWindowService,
+                conversationRoutingService, slaMonitoringService, cannedResponseService,
+                slaEventRepository, userRepository, objectMapper, messageRepository, null);
     }
 
     @Autowired
@@ -67,7 +87,8 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
             ConversationSlaEventRepository slaEventRepository,
             UserRepository userRepository,
             ObjectMapper objectMapper,
-            @Autowired(required = false) @Nullable MessageRepository messageRepository
+            @Autowired(required = false) @Nullable MessageRepository messageRepository,
+            @Autowired(required = false) @Nullable CrmOutboxService outboxService
     ) {
         this.crmMacroRepository = crmMacroRepository;
         this.conversationRepository = conversationRepository;
@@ -80,6 +101,7 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
         this.userRepository = userRepository;
         this.objectMapper = objectMapper;
         this.messageRepository = messageRepository;
+        this.outboxService = outboxService;
     }
 
     @Override
@@ -174,26 +196,104 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
 
                             String interpolated = cannedResponseService.interpolateTemplate(organizationId, conversationId, rawContent, agentName);
 
-                            // Duplicate-dispatch protection (5-second deduplication window)
-                            if (messageRepository != null && messageRepository.existsByConversationIdAndDirectionAndContentAndSentAtAfter(
+                            // 1. Transactional Outbox Check & Pre-persistence.
+                            // The outbox entry is committed in its own transaction *before* the provider is
+                            // contacted, so an abandoned dispatch always leaves a durable trace behind.
+                            String idempotencyKey = "macro:" + macro.getId() + ":conv:" + conversationId + ":hash:" +
+                                    AuditChecksumUtils.computeCanonicalChecksum(organizationId, conversationId, macro.getId(), "MACRO_REPLY", "SEND_REPLY", agentName, interpolated, null);
+
+                            CrmOutboxMessage outbox = null;
+                            if (outboxService != null) {
+                                try {
+                                    outbox = outboxService.register(
+                                            organizationId,
+                                            conversationId,
+                                            macro.getId(),
+                                            conversation.getChannel() != null ? conversation.getChannel().name() : "WHATSAPP",
+                                            contact != null ? contact.getExternalId() : "",
+                                            interpolated,
+                                            null,
+                                            idempotencyKey);
+                                } catch (org.springframework.dao.DataIntegrityViolationException concurrentRegistration) {
+                                    // A concurrent execution registered the same dispatch first and owns it.
+                                    log.info("Macro [{}] SEND_REPLY skipped: a concurrent execution already registered this dispatch", macro.getName());
+                                    actionsExecuted.add("SEND_REPLY_SKIPPED: Concurrent dispatch already registered for this message");
+                                    break;
+                                }
+
+                                String outboxStatus = outbox.getStatus();
+                                if (CrmOutboxService.STATUS_DISPATCHED.equalsIgnoreCase(outboxStatus)) {
+                                    log.info("Macro [{}] SEND_REPLY skipped: duplicate outbox entry already dispatched", macro.getName());
+                                    actionsExecuted.add("SEND_REPLY_SKIPPED: Duplicate dispatch suppressed via transactional outbox");
+                                    break;
+                                } else if (CrmOutboxService.STATUS_AMBIGUOUS.equalsIgnoreCase(outboxStatus)) {
+                                    log.warn("Macro [{}] SEND_REPLY skipped: previous dispatch status ambiguous; reconciliation required", macro.getName());
+                                    actionsExecuted.add("SEND_REPLY_SKIPPED: Previous dispatch ambiguous; manual reconciliation required");
+                                    break;
+                                } else if (outbox.getAttempts() >= outbox.getMaxAttempts()) {
+                                    log.warn("Macro [{}] SEND_REPLY skipped: dispatch attempt budget exhausted", macro.getName());
+                                    actionsExecuted.add("SEND_REPLY_SKIPPED: Maximum dispatch attempts exhausted");
+                                    break;
+                                }
+
+                                // Claim the dispatch atomically. If a concurrent execution claimed it
+                                // first, this one must not send the message to the customer a second time.
+                                if (!outboxService.claimForDispatch(outbox.getId(), outbox.getAttempts())) {
+                                    log.info("Macro [{}] SEND_REPLY skipped: dispatch claimed by a concurrent execution", macro.getName());
+                                    actionsExecuted.add("SEND_REPLY_SKIPPED: Dispatch claimed by a concurrent execution");
+                                    break;
+                                }
+                            }
+
+                            // 2. In-memory / repository 5-second idempotency window fallback if outbox not configured
+                            if (outbox == null && messageRepository != null && messageRepository.existsByConversationIdAndDirectionAndContentAndSentAtAfter(
                                     conversationId, "OUTBOUND", interpolated, java.time.Instant.now().minusSeconds(5))) {
                                 log.info("Macro [{}] SEND_REPLY skipped: duplicate dispatch detected within 5s window", macro.getName());
                                 actionsExecuted.add("SEND_REPLY_SKIPPED: Duplicate dispatch suppressed within idempotency window");
                                 break;
                             }
 
+                            // 3. Dispatch to CRM live chat / provider
                             try {
                                 Message sentMsg = crmService.sendAgentReply(organizationId, conversationId, interpolated, null, false);
                                 if (sentMsg != null && "FAILED".equalsIgnoreCase(sentMsg.getDeliveryStatus())) {
                                     log.warn("Macro [{}] SEND_REPLY provider delivery failed", macro.getName());
+                                    if (outbox != null) {
+                                        outboxService.markFailed(outbox.getId(), "External provider delivery failed");
+                                    }
                                     actionsExecuted.add("SEND_REPLY_FAILED: External provider delivery failed");
+                                } else if (sentMsg != null && "AMBIGUOUS".equalsIgnoreCase(sentMsg.getDeliveryStatus())) {
+                                    log.warn("Macro [{}] SEND_REPLY provider delivery ambiguous", macro.getName());
+                                    if (outbox != null) {
+                                        outboxService.markAmbiguous(outbox.getId(), "Provider response unconfirmed (ambiguous network outcome)");
+                                    }
+                                    actionsExecuted.add("SEND_REPLY_AMBIGUOUS: Dispatch unconfirmed; provider response ambiguous");
                                 } else {
+                                    if (outbox != null) {
+                                        outboxService.markDispatched(outbox.getId(),
+                                                sentMsg != null ? sentMsg.getId() : null,
+                                                sentMsg != null ? sentMsg.getExternalMessageId() : null);
+                                    }
                                     outboundSnippet = interpolated;
                                     actionsExecuted.add("SEND_REPLY: " + (interpolated.length() > 30 ? interpolated.substring(0, 30) + "..." : interpolated));
                                 }
                             } catch (Exception dispatchEx) {
-                                log.warn("Macro [{}] SEND_REPLY external dispatch failed: {}", macro.getName(), dispatchEx.getMessage());
-                                actionsExecuted.add("SEND_REPLY_FAILED: " + dispatchEx.getMessage());
+                                boolean isAmbiguous = dispatchEx instanceof java.net.SocketTimeoutException
+                                        || (dispatchEx.getMessage() != null && dispatchEx.getMessage().toLowerCase().contains("timeout"));
+                                if (outbox != null) {
+                                    if (isAmbiguous) {
+                                        outboxService.markAmbiguous(outbox.getId(), dispatchEx.getMessage());
+                                    } else {
+                                        outboxService.markFailed(outbox.getId(), dispatchEx.getMessage());
+                                    }
+                                }
+                                if (isAmbiguous) {
+                                    log.warn("Macro [{}] SEND_REPLY external dispatch outcome ambiguous: {}", macro.getName(), dispatchEx.getMessage());
+                                    actionsExecuted.add("SEND_REPLY_AMBIGUOUS: " + dispatchEx.getMessage());
+                                } else {
+                                    log.warn("Macro [{}] SEND_REPLY external dispatch failed: {}", macro.getName(), dispatchEx.getMessage());
+                                    actionsExecuted.add("SEND_REPLY_FAILED: " + dispatchEx.getMessage());
+                                }
                             }
                         }
                     }
@@ -258,7 +358,8 @@ public class MacroExecutionServiceImpl implements MacroExecutionService {
                                             .details("Manually assigned to user " + targetUser.get().getEmail())
                                             .build();
                                     event.setOrganizationId(organizationId);
-                                    slaEventRepository.save(event);
+                                    event = slaEventRepository.save(event);
+                                    AuditChecksumUtils.sealSlaEvent(organizationId, conversation.getId(), event);
 
                                     actionsExecuted.add("ASSIGN_AGENT: " + targetUser.get().getEmail());
                                 }

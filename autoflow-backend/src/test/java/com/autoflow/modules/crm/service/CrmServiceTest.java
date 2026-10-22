@@ -450,6 +450,9 @@ class CrmServiceTest {
 
         assertNotNull(sent);
         assertEquals("FAILED", sent.getDeliveryStatus());
-        assertTrue(sent.getExternalMessageId().startsWith("failed_"));
+        // No external provider message id may be fabricated for a dispatch that never reached the
+        // provider - a synthetic id would be indistinguishable from a real one for downstream
+        // reconciliation and de-duplication.
+        assertNull(sent.getExternalMessageId());
     }
 }

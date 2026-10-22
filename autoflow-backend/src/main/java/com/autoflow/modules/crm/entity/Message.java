@@ -55,4 +55,7 @@ public class Message {
     @CreatedDate
     @Column(name = "sent_at", nullable = false, updatable = false)
     private Instant sentAt;
+
+    @Column(name = "audit_checksum", length = 64)
+    private String auditChecksum;
 }

@@ -151,7 +151,8 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
                             .reason("Late first response at " + now + " (due: " + conversation.getSlaFirstResponseDueAt() + ")")
                             .build();
                     event.setOrganizationId(conversation.getOrganizationId());
-                    slaEventRepository.save(event);
+                    event = slaEventRepository.save(event);
+                    AuditChecksumUtils.sealSlaEvent(conversation.getOrganizationId(), conversation.getId(), event);
                 }
             }
         }
@@ -203,7 +204,8 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
                             .reason("First response deadline passed: " + c.getSlaFirstResponseDueAt())
                             .build();
                     breachEvent.setOrganizationId(c.getOrganizationId());
-                    slaEventRepository.save(breachEvent);
+                    breachEvent = slaEventRepository.save(breachEvent);
+                    AuditChecksumUtils.sealSlaEvent(c.getOrganizationId(), c.getId(), breachEvent);
                 }
 
                 if (routingService != null) {
@@ -218,7 +220,8 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
                                 .reason("Auto-escalated to URGENT due to first response SLA breach")
                                 .build();
                         escEvent.setOrganizationId(c.getOrganizationId());
-                        slaEventRepository.save(escEvent);
+                        escEvent = slaEventRepository.save(escEvent);
+                        AuditChecksumUtils.sealSlaEvent(c.getOrganizationId(), c.getId(), escEvent);
                     }
                 }
             }
@@ -242,7 +245,8 @@ public class SlaMonitoringServiceImpl implements SlaMonitoringService {
                             .reason("Resolution deadline passed: " + c.getSlaResolutionDueAt())
                             .build();
                     breachEvent.setOrganizationId(c.getOrganizationId());
-                    slaEventRepository.save(breachEvent);
+                    breachEvent = slaEventRepository.save(breachEvent);
+                    AuditChecksumUtils.sealSlaEvent(c.getOrganizationId(), c.getId(), breachEvent);
                 }
             }
         }

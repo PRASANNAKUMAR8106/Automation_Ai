@@ -45,4 +45,7 @@ public class ConversationSlaEvent extends TenantAwareEntity {
 
     @Column(name = "details", columnDefinition = "TEXT")
     private String details;
+
+    @Column(name = "audit_checksum", length = 64)
+    private String auditChecksum;
 }

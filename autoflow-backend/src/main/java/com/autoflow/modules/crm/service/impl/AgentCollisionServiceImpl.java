@@ -32,6 +32,8 @@ public class AgentCollisionServiceImpl implements AgentCollisionService {
     // Fallback in-memory registry: conversationId -> Map of userId -> PresenceRecord
     private final Map<UUID, Map<UUID, PresenceRecord>> presenceRegistry = new ConcurrentHashMap<>();
 
+    private final java.util.concurrent.atomic.AtomicBoolean degraded = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     private record PresenceRecord(UUID userId, String userEmail, String action, Instant lastActiveAt) {}
 
     public AgentCollisionServiceImpl(LiveChatStreamService liveChatStreamService) {
@@ -53,9 +55,16 @@ public class AgentCollisionServiceImpl implements AgentCollisionService {
         this.stringRedisTemplate = stringRedisTemplate;
         if (stringRedisTemplate != null) {
             log.info("AgentCollisionService initialized with Redis-backed shared presence");
+            this.degraded.set(false);
         } else {
             log.info("AgentCollisionService initialized with in-memory presence (no Redis)");
+            this.degraded.set(true);
         }
+    }
+
+    @Override
+    public boolean isDegradedMode() {
+        return degraded.get();
     }
 
     private String getRedisKey(UUID organizationId, UUID conversationId) {
@@ -92,8 +101,15 @@ public class AgentCollisionServiceImpl implements AgentCollisionService {
                     stringRedisTemplate.opsForHash().put(key, userId.toString(), objectMapper.writeValueAsString(payload));
                     stringRedisTemplate.expire(key, Duration.ofSeconds(35));
                 }
+                if (degraded.compareAndSet(true, false)) {
+                    log.info("Redis presence write succeeded; cluster-authoritative mode active");
+                }
             } catch (Exception e) {
-                log.debug("Redis presence update failed, relying on in-memory lease: {}", e.getMessage());
+                if (degraded.compareAndSet(false, true)) {
+                    log.warn("Redis presence write failed, degraded to instance in-memory lease: {}", e.getMessage());
+                } else {
+                    log.debug("Redis presence update failed, relying on in-memory lease: {}", e.getMessage());
+                }
             }
         }
 
@@ -166,10 +182,17 @@ public class AgentCollisionServiceImpl implements AgentCollisionService {
                     }
                     redisList.sort(Comparator.comparing(AgentPresenceDto::getLastActiveAt).reversed());
                 }
+                if (degraded.compareAndSet(true, false)) {
+                    log.info("Redis presence connection recovered; switching back to cluster-authoritative mode");
+                }
+                // Evict local in-memory presence for this conversation to prevent ghost presence upon Redis recovery
+                presenceRegistry.remove(conversationId);
                 // Redis call succeeded: return cluster authoritative list
                 return redisList;
             } catch (Exception e) {
-                log.warn("Redis presence read failed (outage/timeout), falling back to instance in-memory lease: {}", e.getMessage());
+                if (degraded.compareAndSet(false, true)) {
+                    log.warn("Redis presence degraded mode activated; falling back to instance in-memory lease: {}", e.getMessage());
+                }
             }
         }
 

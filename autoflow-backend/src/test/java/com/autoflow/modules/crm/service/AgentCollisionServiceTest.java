@@ -15,6 +15,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -108,5 +109,55 @@ class AgentCollisionServiceTest {
         assertThat(viewers).hasSize(1);
         assertThat(viewers.get(0).getUserId()).isEqualTo(agent1);
         assertThat(viewers.get(0).getUserEmail()).isEqualTo("alice@autoflow.ai");
+        assertThat(redisAwareService.isDegradedMode()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should recover from degraded mode and eliminate ghost presence when Redis recovers across instances")
+    @SuppressWarnings("unchecked")
+    void shouldRecoverFromDegradedModeWithoutGhostPresence() throws Exception {
+        org.springframework.data.redis.core.StringRedisTemplate mockRedis = mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.HashOperations<String, Object, Object> mockHashOps = mock(org.springframework.data.redis.core.HashOperations.class);
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+        when(mockRedis.opsForHash()).thenReturn(mockHashOps);
+
+        AgentCollisionServiceImpl instanceA = new AgentCollisionServiceImpl(liveChatStreamService, mapper, mockRedis);
+        AgentCollisionServiceImpl instanceB = new AgentCollisionServiceImpl(liveChatStreamService, mapper, mockRedis);
+
+        assertThat(instanceA.isDegradedMode()).isFalse();
+        assertThat(instanceB.isDegradedMode()).isFalse();
+
+        // 1. Redis outage occurs
+        when(mockHashOps.entries(anyString())).thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("Connection refused"));
+
+        // Instance A records presence locally during outage
+        instanceA.recordPresence(orgId, convoId, agent1, "alice@autoflow.ai", "VIEWING");
+        List<AgentPresenceDto> degradedViewers = instanceA.getActiveViewers(orgId, convoId);
+
+        assertThat(instanceA.isDegradedMode()).isTrue();
+        assertThat(degradedViewers).hasSize(1);
+        assertThat(degradedViewers.get(0).getUserEmail()).isEqualTo("alice@autoflow.ai");
+
+        // 2. Redis cluster recovers. In cluster, only Agent 2 is registered (Agent 1 closed tab)
+        java.util.Map<Object, Object> recoveredClusterEntries = new java.util.HashMap<>();
+        recoveredClusterEntries.put(agent2.toString(), mapper.writeValueAsString(java.util.Map.of(
+                "userId", agent2.toString(),
+                "userEmail", "bob@autoflow.ai",
+                "action", "TYPING",
+                "lastActiveAt", System.currentTimeMillis()
+        )));
+
+        // Re-stub without invoking the mock: the previous stub throws, and a plain when(...) call
+        // would trigger that exception while recording the new stub.
+        doReturn(recoveredClusterEntries).when(mockHashOps).entries(anyString());
+
+        // Instance A queries after recovery: cluster state is authoritative, local ghost lease for Agent 1 is evicted
+        List<AgentPresenceDto> recoveredViewers = instanceA.getActiveViewers(orgId, convoId);
+
+        assertThat(instanceA.isDegradedMode()).isFalse();
+        assertThat(recoveredViewers).hasSize(1);
+        assertThat(recoveredViewers.get(0).getUserId()).isEqualTo(agent2);
+        assertThat(recoveredViewers.get(0).getUserEmail()).isEqualTo("bob@autoflow.ai");
     }
 }

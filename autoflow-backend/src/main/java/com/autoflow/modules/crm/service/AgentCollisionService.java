@@ -22,4 +22,9 @@ public interface AgentCollisionService {
      * Returns all currently active agents viewing or typing in the conversation within the 30s TTL lease.
      */
     List<AgentPresenceDto> getActiveViewers(UUID organizationId, UUID conversationId);
+
+    /**
+     * Returns true if presence is currently operating in degraded local in-memory mode.
+     */
+    boolean isDegradedMode();
 }

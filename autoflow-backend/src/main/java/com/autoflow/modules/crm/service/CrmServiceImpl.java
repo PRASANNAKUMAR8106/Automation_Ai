@@ -6,6 +6,7 @@ import com.autoflow.modules.channel.entity.ConnectedAccount;
 import com.autoflow.modules.channel.provider.instagram.InstagramChannelProvider;
 import com.autoflow.modules.channel.provider.whatsapp.WhatsAppChannelProvider;
 import com.autoflow.modules.channel.repository.ConnectedAccountRepository;
+import com.autoflow.modules.channel.spi.SocialChannelProviderRegistry;
 import com.autoflow.modules.crm.dto.CrmDto;
 import com.autoflow.modules.crm.entity.*;
 import com.autoflow.modules.crm.repository.ContactRepository;
@@ -142,6 +143,12 @@ public class CrmServiceImpl implements CrmService {
 
     @Transactional
     public Message recordMessage(UUID organizationId, Conversation conversation, String direction, String senderType, String messageType, String content, String mediaUrl, String externalMessageId, String deliveryStatus) {
+        // Multi-layer firewall check on all outbound recordings
+        if (direction != null && direction.equalsIgnoreCase("OUTBOUND")) {
+            SocialChannelProviderRegistry.assertOutboundPermitted(messageType, senderType, content, mediaUrl);
+        }
+
+        Instant sentAt = Instant.now();
         Message msg = Message.builder()
                 .organizationId(organizationId)
                 .conversation(conversation)
@@ -151,11 +158,16 @@ public class CrmServiceImpl implements CrmService {
                 .content(content)
                 .mediaUrl(mediaUrl)
                 .externalMessageId(externalMessageId)
-                .sentAt(Instant.now())
+                .sentAt(sentAt)
                 .deliveryStatus(deliveryStatus != null ? deliveryStatus : "DELIVERED")
                 .build();
 
         msg = messageRepository.save(msg);
+
+        // Durable, tamper-evident audit checksum.
+        // The instance returned by save() is managed inside this transaction, so sealing it here is
+        // flushed to the database on commit - no second write is required.
+        AuditChecksumUtils.sealMessage(organizationId, conversation.getId(), msg);
 
         // Update conversation timestamps
         Instant now = Instant.now();
@@ -298,12 +310,7 @@ public class CrmServiceImpl implements CrmService {
         messagingWindowService.validateCanSend(conversation, humanAgentTag);
 
         // Multi-layer firewall check: guarantee internal notes and whispers NEVER reach external channels
-        if (content != null && (content.startsWith("[INTERNAL_NOTE]") || content.startsWith("[SUPERVISOR_WHISPER]"))) {
-            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to external channels");
-        }
-        if (mediaUrl != null && (mediaUrl.contains("[INTERNAL_NOTE]") || mediaUrl.contains("[SUPERVISOR_WHISPER]"))) {
-            throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched via media messages");
-        }
+        SocialChannelProviderRegistry.assertOutboundPermitted("TEXT", "AGENT", content, mediaUrl);
 
         Contact contact = conversation.getContact();
         ChannelType channel = conversation.getChannel();
@@ -320,7 +327,7 @@ public class CrmServiceImpl implements CrmService {
             }
         }
 
-        String externalMsgId = "agent_reply_" + System.currentTimeMillis();
+        String externalMsgId = null;
         boolean dispatchFailed = false;
         String dispatchError = null;
 
@@ -354,6 +361,7 @@ public class CrmServiceImpl implements CrmService {
                         attempt, maxAttempts, channel, e.getMessage());
                 dispatchFailed = true;
                 dispatchError = e.getMessage();
+                externalMsgId = null;
                 if (attempt < maxAttempts) {
                     try {
                         Thread.sleep(150);
@@ -368,7 +376,7 @@ public class CrmServiceImpl implements CrmService {
         if (dispatchFailed) {
             log.error("All {} attempts to dispatch live chat agent message through provider {} failed: {}",
                     maxAttempts, channel, dispatchError);
-            externalMsgId = "failed_" + System.currentTimeMillis();
+            externalMsgId = null; // Strictly do not fabricate external provider message ID on failure
         }
 
         String messageType = (mediaUrl != null && !mediaUrl.isBlank()) ? "MEDIA" : "TEXT";

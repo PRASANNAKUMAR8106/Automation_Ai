@@ -128,7 +128,8 @@ public class ConversationRoutingServiceImpl implements ConversationRoutingServic
                         .details("Assigned via " + routingPolicy.name())
                         .build();
                 event.setOrganizationId(orgId);
-                slaEventRepository.save(event);
+                event = slaEventRepository.save(event);
+                AuditChecksumUtils.sealSlaEvent(orgId, conversation.getId(), event);
             }
         }
 

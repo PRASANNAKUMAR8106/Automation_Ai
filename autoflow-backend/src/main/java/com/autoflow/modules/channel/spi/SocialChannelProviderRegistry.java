@@ -41,22 +41,43 @@ public class SocialChannelProviderRegistry {
     /**
      * Strict multi-layer firewall enforcement:
      * Guarantees that internal notes and supervisor whispers NEVER reach external social providers.
+     * Evaluates trusted origin metadata (messageType, senderType) alongside explicit content/media markers.
      */
-    public void assertPermittedOutboundMessage(String messageType, String content) {
+    public void assertPermittedOutbound(String messageType, String senderType, String content, String mediaUrl) {
+        assertOutboundPermitted(messageType, senderType, content, mediaUrl);
+    }
+
+    /**
+     * Stateless form of the outbound firewall policy so that every dispatch path
+     * (CRM live chat, macro execution, campaign broadcasts) enforces exactly the same
+     * rules without needing the registry bean to be injected.
+     */
+    public static void assertOutboundPermitted(String messageType, String senderType, String content, String mediaUrl) {
         if (messageType != null) {
             String upper = messageType.trim().toUpperCase();
-            if (upper.contains("INTERNAL_NOTE") || upper.contains("SUPERVISOR_WHISPER") || upper.contains("WHISPER")) {
+            if (upper.contains("INTERNAL") || upper.contains("NOTE") || upper.contains("WHISPER")) {
                 throw new SecurityException("FIREWALL BREACH: Internal notes and supervisor whispers cannot be dispatched to external social providers! Blocked messageType: " + messageType);
+            }
+        }
+        if (senderType != null) {
+            String upper = senderType.trim().toUpperCase();
+            if (upper.contains("INTERNAL") || upper.contains("WHISPER")) {
+                throw new SecurityException("FIREWALL BREACH: Disallowed senderType for external social dispatch: " + senderType);
             }
         }
         if (content != null && (content.startsWith("[INTERNAL_NOTE]") || content.startsWith("[SUPERVISOR_WHISPER]"))) {
             throw new SecurityException("FIREWALL BREACH: Content tagged as internal note or whisper cannot be dispatched to external social providers!");
         }
-    }
-
-    public void assertPermittedOutboundMedia(String mediaUrl) {
         if (mediaUrl != null && (mediaUrl.contains("[INTERNAL_NOTE]") || mediaUrl.contains("[SUPERVISOR_WHISPER]"))) {
             throw new SecurityException("FIREWALL BREACH: Media URL tagged as internal note or whisper cannot be dispatched to external social providers!");
         }
+    }
+
+    public void assertPermittedOutboundMessage(String messageType, String content) {
+        assertOutboundPermitted(messageType, null, content, null);
+    }
+
+    public void assertPermittedOutboundMedia(String mediaUrl) {
+        assertOutboundPermitted(null, null, null, mediaUrl);
     }
 }

@@ -60,6 +60,9 @@ class MacroExecutionServiceTest {
     @Mock
     private com.autoflow.modules.crm.repository.MessageRepository messageRepository;
 
+    @Mock
+    private CrmOutboxService outboxService;
+
     private MacroExecutionServiceImpl service;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -273,9 +276,53 @@ class MacroExecutionServiceTest {
         ApplyMacroResult result = service.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
 
         assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_FAILED"));
+        // A timeout leaves the provider outcome unknown, so it is reported as ambiguous rather than
+        // failed: the message may already have reached the customer and must not be retried blindly.
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_AMBIGUOUS"));
+        assertThat(result.getActionsExecuted()).noneMatch(a -> a.contains("SEND_REPLY_FAILED"));
         assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("ADD_TAGS"));
         verify(crmService).addTagsToContact(eq(orgId), eq(contact.getId()), eq(List.of("welcome_sent")));
+    }
+
+    @Test
+    @DisplayName("Should report a deterministic provider rejection as SEND_REPLY_FAILED without failing other actions")
+    void shouldReportDeterministicDispatchRejectionAsFailed() {
+        Contact contact = Contact.builder().fullName("Bob Martin").build();
+        contact.setId(UUID.randomUUID());
+
+        Conversation conv = Conversation.builder()
+                .contact(contact)
+                .channel(ChannelType.WHATSAPP)
+                .build();
+        conv.setId(convoId);
+
+        String actionsJson = """
+                [
+                    {"type": "SEND_REPLY", "content": "Welcome aboard!"},
+                    {"type": "ADD_TAGS", "tags": ["welcome_sent"]}
+                ]
+                """;
+
+        CrmMacro macro = CrmMacro.builder().name("Welcome Flow").actionsJson(actionsJson).build();
+        macro.setId(macroId);
+
+        when(crmMacroRepository.findByIdAndOrganizationId(macroId, orgId)).thenReturn(Optional.of(macro));
+        when(conversationRepository.findByIdAndOrganizationId(convoId, orgId)).thenReturn(Optional.of(conv));
+        when(messagingWindowService.evaluateWindow(conv)).thenReturn(
+                MessagingWindowResponse.builder().windowStatus("ACTIVE_24H").build()
+        );
+        when(cannedResponseService.interpolateTemplate(any(), any(), any(), any())).thenReturn("Welcome aboard!");
+
+        // A provider rejection that is known to have not reached the customer
+        doThrow(new RuntimeException("Meta Cloud API rejected the message: invalid template"))
+                .when(crmService).sendAgentReply(any(), any(), any(), any(), anyBoolean());
+
+        ApplyMacroResult result = service.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_FAILED"));
+        assertThat(result.getActionsExecuted()).noneMatch(a -> a.contains("SEND_REPLY_AMBIGUOUS"));
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("ADD_TAGS"));
     }
 
     @Test
@@ -316,5 +363,169 @@ class MacroExecutionServiceTest {
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_SKIPPED"));
         verify(crmService, never()).sendAgentReply(any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("Should suppress a duplicate SEND_REPLY when the transactional outbox already dispatched it")
+    void shouldSuppressDuplicateDispatchViaOutbox() {
+        MacroExecutionServiceImpl outboxServiceImpl = serviceWithOutbox();
+        stubMacroWithSingleReply("Welcome aboard!");
+
+        CrmOutboxMessage existing = CrmOutboxMessage.builder()
+                .idempotencyKey("existing")
+                .status(CrmOutboxService.STATUS_DISPATCHED)
+                .attempts(1)
+                .maxAttempts(3)
+                .build();
+        existing.setId(UUID.randomUUID());
+        when(outboxService.register(eq(orgId), eq(convoId), eq(macroId), any(), any(), any(), any(), any()))
+                .thenReturn(existing);
+
+        ApplyMacroResult result = outboxServiceImpl.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_SKIPPED"));
+        verify(crmService, never()).sendAgentReply(any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("Should skip a SEND_REPLY whose previous dispatch outcome was ambiguous")
+    void shouldSkipAmbiguousOutboxEntry() {
+        MacroExecutionServiceImpl outboxServiceImpl = serviceWithOutbox();
+        stubMacroWithSingleReply("Welcome aboard!");
+
+        CrmOutboxMessage existing = CrmOutboxMessage.builder()
+                .idempotencyKey("existing")
+                .status(CrmOutboxService.STATUS_AMBIGUOUS)
+                .attempts(1)
+                .maxAttempts(3)
+                .build();
+        existing.setId(UUID.randomUUID());
+        when(outboxService.register(eq(orgId), eq(convoId), eq(macroId), any(), any(), any(), any(), any()))
+                .thenReturn(existing);
+
+        ApplyMacroResult result = outboxServiceImpl.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_SKIPPED"));
+        verify(crmService, never()).sendAgentReply(any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("Should skip a SEND_REPLY whose dispatch attempt budget is exhausted")
+    void shouldSkipExhaustedOutboxEntry() {
+        MacroExecutionServiceImpl outboxServiceImpl = serviceWithOutbox();
+        stubMacroWithSingleReply("Welcome aboard!");
+
+        CrmOutboxMessage existing = CrmOutboxMessage.builder()
+                .idempotencyKey("existing")
+                .status(CrmOutboxService.STATUS_FAILED)
+                .attempts(3)
+                .maxAttempts(3)
+                .build();
+        existing.setId(UUID.randomUUID());
+        when(outboxService.register(eq(orgId), eq(convoId), eq(macroId), any(), any(), any(), any(), any()))
+                .thenReturn(existing);
+
+        ApplyMacroResult result = outboxServiceImpl.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_SKIPPED"));
+        verify(crmService, never()).sendAgentReply(any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("Should register, attempt and mark the outbox entry when a SEND_REPLY is dispatched")
+    void shouldRecordDispatchInOutbox() {
+        MacroExecutionServiceImpl outboxServiceImpl = serviceWithOutbox();
+        stubMacroWithSingleReply("Welcome aboard!");
+
+        CrmOutboxMessage registered = CrmOutboxMessage.builder()
+                .idempotencyKey("fresh")
+                .status(CrmOutboxService.STATUS_PENDING)
+                .attempts(0)
+                .maxAttempts(3)
+                .build();
+        registered.setId(UUID.randomUUID());
+        Message sent = Message.builder().deliveryStatus("DELIVERED").build();
+        sent.setId(UUID.randomUUID());
+        sent.setExternalMessageId("ext-999");
+
+        when(outboxService.register(eq(orgId), eq(convoId), eq(macroId), any(), any(), any(), any(), any()))
+                .thenReturn(registered);
+        when(outboxService.claimForDispatch(registered.getId(), registered.getAttempts())).thenReturn(true);
+        when(crmService.sendAgentReply(eq(orgId), eq(convoId), any(), any(), eq(false))).thenReturn(sent);
+
+        ApplyMacroResult result = outboxServiceImpl.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY"));
+        verify(outboxService).claimForDispatch(registered.getId(), registered.getAttempts());
+        verify(outboxService).markDispatched(registered.getId(), sent.getId(), "ext-999");
+    }
+
+    @Test
+    @DisplayName("Should not send a duplicate reply when a concurrent execution already claimed the dispatch")
+    void shouldSkipDispatchWhenClaimLost() {
+        MacroExecutionServiceImpl outboxServiceImpl = serviceWithOutbox();
+        stubMacroWithSingleReply("Welcome aboard!");
+
+        CrmOutboxMessage registered = CrmOutboxMessage.builder()
+                .idempotencyKey("contended")
+                .status(CrmOutboxService.STATUS_PENDING)
+                .attempts(0)
+                .maxAttempts(3)
+                .build();
+        registered.setId(UUID.randomUUID());
+
+        when(outboxService.register(eq(orgId), eq(convoId), eq(macroId), any(), any(), any(), any(), any()))
+                .thenReturn(registered);
+        when(outboxService.claimForDispatch(registered.getId(), registered.getAttempts())).thenReturn(false);
+
+        ApplyMacroResult result = outboxServiceImpl.applyMacro(orgId, convoId, macroId, userId, "Sarah Agent");
+
+        assertThat(result.getActionsExecuted()).anyMatch(a -> a.contains("SEND_REPLY_SKIPPED"));
+        verify(crmService, never()).sendAgentReply(any(), any(), any(), any(), eq(false));
+        verify(outboxService, never()).markDispatched(any(), any(), any());
+    }
+
+    private MacroExecutionServiceImpl serviceWithOutbox() {
+        return new MacroExecutionServiceImpl(
+                crmMacroRepository,
+                conversationRepository,
+                crmService,
+                messagingWindowService,
+                conversationRoutingService,
+                slaMonitoringService,
+                cannedResponseService,
+                slaEventRepository,
+                userRepository,
+                objectMapper,
+                messageRepository,
+                outboxService
+        );
+    }
+
+    private void stubMacroWithSingleReply(String replyContent) {
+        Contact contact = Contact.builder().fullName("Bob Martin").build();
+        contact.setId(UUID.randomUUID());
+
+        Conversation conv = Conversation.builder()
+                .contact(contact)
+                .channel(ChannelType.WHATSAPP)
+                .build();
+        conv.setId(convoId);
+
+        String actionsJson = "[{\"type\": \"SEND_REPLY\", \"content\": \"" + replyContent + "\"}]";
+
+        CrmMacro macro = CrmMacro.builder().name("Welcome Flow").actionsJson(actionsJson).build();
+        macro.setId(macroId);
+
+        when(crmMacroRepository.findByIdAndOrganizationId(macroId, orgId)).thenReturn(Optional.of(macro));
+        when(conversationRepository.findByIdAndOrganizationId(convoId, orgId)).thenReturn(Optional.of(conv));
+        when(messagingWindowService.evaluateWindow(conv)).thenReturn(
+                MessagingWindowResponse.builder().windowStatus("ACTIVE_24H").build()
+        );
+        when(cannedResponseService.interpolateTemplate(any(), any(), any(), any())).thenReturn(replyContent);
     }
 }
