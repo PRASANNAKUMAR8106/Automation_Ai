@@ -48,7 +48,7 @@ public class ConnectedAccount extends TenantAwareEntity {
     @Builder.Default
     private ConnectedAccountStatus status = ConnectedAccountStatus.ACTIVE;
 
-    @Column(name = "metadata", columnDefinition = "jsonb")
+    @Column(name = "metadata", columnDefinition = "text")
     @Builder.Default
     private String metadata = "{}";
 

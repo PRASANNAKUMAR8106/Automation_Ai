@@ -32,7 +32,7 @@ public class WorkflowVersion {
     @Column(name = "version_number", nullable = false)
     private int versionNumber;
 
-    @Column(name = "graph_definition", nullable = false, columnDefinition = "jsonb")
+    @Column(name = "graph_definition", nullable = false, columnDefinition = "text")
     private String graphDefinition;
 
     @ManyToOne(fetch = FetchType.LAZY)

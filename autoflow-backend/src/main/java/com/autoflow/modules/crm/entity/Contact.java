@@ -54,7 +54,7 @@ public class Contact extends TenantAwareEntity {
     @Builder.Default
     private List<String> tags = new ArrayList<>();
 
-    @Column(name = "custom_fields", columnDefinition = "jsonb")
+    @Column(name = "custom_fields", columnDefinition = "text")
     @Builder.Default
     private String customFields = "{}";
 

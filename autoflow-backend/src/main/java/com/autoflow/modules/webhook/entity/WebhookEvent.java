@@ -30,7 +30,7 @@ public class WebhookEvent {
     @Column(name = "event_id", nullable = false)
     private String eventId;
 
-    @Column(name = "payload", nullable = false, columnDefinition = "jsonb")
+    @Column(name = "payload", nullable = false, columnDefinition = "text")
     private String payload;
 
     @CreatedDate

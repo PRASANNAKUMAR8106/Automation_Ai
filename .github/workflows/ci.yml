@@ -18,6 +18,23 @@ jobs:
     name: Backend Build & Test (Spring Boot 3.3 / Java 21)
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        # The regular test suite runs on H2 with Flyway disabled, so the migration scripts are
+        # only exercised by PostgresMigrationValidationTest against this service container.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: autoflow_ci
+          POSTGRES_USER: autoflow_ci
+          POSTGRES_PASSWORD: autoflow_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U autoflow_ci -d autoflow_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -35,6 +52,15 @@ jobs:
       - name: Compile Backend & Run Automated Tests
         working-directory: ./autoflow-backend
         run: ./gradlew test --rerun --no-daemon
+
+      - name: Validate Flyway Migrations Against PostgreSQL
+        working-directory: ./autoflow-backend
+        run: >
+          ./gradlew test --rerun --no-daemon
+          --tests "com.autoflow.modules.crm.migration.PostgresMigrationValidationTest"
+          -Dautoflow.postgres.url=jdbc:postgresql://localhost:5432/autoflow_ci
+          -Dautoflow.postgres.user=autoflow_ci
+          -Dautoflow.postgres.password=autoflow_ci_password
 
       - name: Publish Test Report Artifact
         if: always()

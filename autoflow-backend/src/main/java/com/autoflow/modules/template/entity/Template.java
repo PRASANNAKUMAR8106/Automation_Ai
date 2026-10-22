@@ -44,7 +44,7 @@ public class Template {
     @Builder.Default
     private List<String> tags = new ArrayList<>();
 
-    @Column(name = "graph_definition", nullable = false, columnDefinition = "jsonb")
+    @Column(name = "graph_definition", nullable = false, columnDefinition = "text")
     private String graphDefinition;
 
     @Column(name = "is_featured", nullable = false)

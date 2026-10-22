@@ -47,7 +47,7 @@ public class AutomationExecution {
     @Column(name = "current_node_id", length = 100)
     private String currentNodeId;
 
-    @Column(name = "execution_context", columnDefinition = "jsonb")
+    @Column(name = "execution_context", columnDefinition = "text")
     @Builder.Default
     private String executionContext = "{}";
 

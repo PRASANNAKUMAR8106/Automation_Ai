@@ -21,7 +21,7 @@ public class Organization extends BaseEntity {
     @Column(name = "slug", nullable = false, unique = true, length = 100)
     private String slug;
 
-    @Column(name = "branding_config", columnDefinition = "jsonb")
+    @Column(name = "branding_config", columnDefinition = "text")
     @Builder.Default
     private String brandingConfig = "{}";
 

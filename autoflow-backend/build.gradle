@@ -61,4 +61,13 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+
+    // Forward the optional PostgreSQL connection details to the test JVM so that
+    // PostgresMigrationValidationTest can run against a real database. The test is skipped
+    // unless autoflow.postgres.url is present.
+    ['autoflow.postgres.url', 'autoflow.postgres.user', 'autoflow.postgres.password'].each { key ->
+        if (System.getProperty(key) != null) {
+            systemProperty key, System.getProperty(key)
+        }
+    }
 }
