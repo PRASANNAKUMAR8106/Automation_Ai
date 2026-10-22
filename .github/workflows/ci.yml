@@ -84,7 +84,10 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.1'
+          # autoflow-app requires Dart SDK ^3.10.3, which ships with Flutter 3.38.x.
+          # Pinning an older Flutter here made `flutter pub get` fail with a version
+          # solving error, so the frontend job never actually ran analyze or test.
+          flutter-version: '3.38.4'
           channel: 'stable'
           cache: true
 
